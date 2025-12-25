@@ -1,0 +1,25 @@
+# Example ticker list file
+# Lines starting with # are comments
+# One ticker per line
+
+# Tech stocks
+AAPL
+MSFT
+GOOGL
+META
+NVDA
+
+# Finance
+JPM
+BAC
+GS
+
+# Healthcare
+JNJ
+UNH
+PFE
+
+# Consumer
+AMZN
+WMT
+COST

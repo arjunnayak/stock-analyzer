@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval test-mock
+.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval test-mock backfill
 
 help: ## Show this help message
 	@echo "Stock Analyzer - Development Commands"
@@ -118,6 +118,14 @@ test-r2: ## Test R2/MinIO connection
 
 test-eodhd: ## Test EODHD API connection
 	python -m src.ingest.eodhd_client
+
+# Backfill from Dolt database
+
+backfill: ## Backfill data from Dolt (requires --tickers or --ticker-file)
+	@echo "💾 Running backfill from Dolt..."
+	@echo "Usage: make backfill ARGS='--tickers AAPL MSFT'"
+	@echo "   or: make backfill ARGS='--ticker-file tickers.txt'"
+	python scripts/backfill_from_dolt.py $(ARGS)
 
 # Signal computation and alerts
 
