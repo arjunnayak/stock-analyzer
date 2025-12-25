@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline
+.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval
 
 help: ## Show this help message
 	@echo "Stock Analyzer - Development Commands"
@@ -114,3 +114,13 @@ test-r2: ## Test R2/MinIO connection
 
 test-eodhd: ## Test EODHD API connection
 	python -m src.ingest.eodhd_client
+
+# Signal computation and alerts
+
+test-signals: ## Run signal computation and alert generation tests
+	@echo "🔍 Running signal tests..."
+	python scripts/test_signals.py
+
+run-daily-eval: ## Run daily signal evaluation (main batch job)
+	@echo "📊 Running daily evaluation..."
+	python -m src.signals.pipeline
