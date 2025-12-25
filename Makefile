@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval
+.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval test-mock
 
 help: ## Show this help message
 	@echo "Stock Analyzer - Development Commands"
@@ -96,6 +96,10 @@ update-deps: ## Update Python dependencies
 	uv lock --upgrade
 
 # Data pipeline commands
+
+test-mock: ## Run mock data pipeline test (no Docker/API required)
+	@echo "🎭 Running mock pipeline test..."
+	python scripts/test_mock_pipeline.py
 
 test-pipeline: ## Run comprehensive pipeline test (config, R2, EODHD, ingest, read)
 	@echo "🧪 Running pipeline test..."
