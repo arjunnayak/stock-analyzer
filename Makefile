@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart logs clean test config
+.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline
 
 help: ## Show this help message
 	@echo "Stock Analyzer - Development Commands"
@@ -94,3 +94,23 @@ install: ## Install Python dependencies
 
 update-deps: ## Update Python dependencies
 	uv lock --upgrade
+
+# Data pipeline commands
+
+test-pipeline: ## Run comprehensive pipeline test (config, R2, EODHD, ingest, read)
+	@echo "🧪 Running pipeline test..."
+	python scripts/test_ingest_and_read.py
+
+ingest: ## Ingest price data for test tickers
+	@echo "📥 Ingesting price data..."
+	python -m src.ingest.ingest_prices
+
+read: ## Read and display stored data
+	@echo "📖 Reading stored data..."
+	python -m src.reader
+
+test-r2: ## Test R2/MinIO connection
+	python -m src.storage.r2_client
+
+test-eodhd: ## Test EODHD API connection
+	python -m src.ingest.eodhd_client
