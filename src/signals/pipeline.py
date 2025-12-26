@@ -19,6 +19,7 @@ from src.reader import TimeSeriesReader
 from src.signals.alerts import Alert, AlertGenerator, AlertRepository
 from src.signals.state_tracker import StateChange, StateTracker
 from src.signals.technical import TechnicalSignals
+from src.signals.valuation import ValuationSignals
 
 
 class SignalPipeline:
@@ -77,6 +78,10 @@ class SignalPipeline:
         """
         Evaluate a single ticker for a user and detect material changes.
 
+        Evaluates both technical and valuation signals:
+        - Technical: 200-day MA crossovers (trend breaks)
+        - Valuation: Regime transitions (cheap/normal/expensive zones)
+
         Args:
             user_id: User UUID
             entity_id: Entity UUID
@@ -101,7 +106,7 @@ class SignalPipeline:
         # Compute technical signals
         df = TechnicalSignals.compute_all_technical_signals(df)
 
-        # Get latest signals
+        # Get latest technical signals
         latest = TechnicalSignals.get_latest_signals(df)
 
         if not latest:
@@ -111,6 +116,7 @@ class SignalPipeline:
         # Get previous state
         previous_state = self.state_tracker.get_state(user_id, entity_id, ticker)
 
+        # === Technical Signal Evaluation ===
         # Detect trend changes
         if latest.get("trend_position"):
             change = self.state_tracker.detect_trend_change(
@@ -135,7 +141,60 @@ class SignalPipeline:
                 alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
                 print(f"  ✓ Alert saved: {alert_id}")
 
-        # Update state for next evaluation
+        # === Valuation Signal Evaluation ===
+        # Fetch valuation data (use longer history for percentile calculation)
+        valuation_start = end_date - timedelta(days=10 * 365)  # 10 years
+        valuation_df = self.reader.r2.get_timeseries("signals_valuation", ticker, valuation_start, end_date)
+
+        if not valuation_df.empty:
+            # Compute valuation signals
+            valuation_result = ValuationSignals.compute_valuation_signals(valuation_df, lookback_years=10)
+
+            if valuation_result['success']:
+                current_regime = valuation_result['regime']
+                current_percentile = valuation_result['current_percentile']
+                current_multiple = valuation_result['current_multiple']
+                metric_type = valuation_result['metric_type']
+
+                # Detect valuation regime change
+                change = self.state_tracker.detect_valuation_regime_change(
+                    previous_state,
+                    current_percentile,
+                    cheap_threshold=ValuationSignals.CHEAP_THRESHOLD,
+                    expensive_threshold=ValuationSignals.EXPENSIVE_THRESHOLD,
+                )
+
+                if change and change.should_alert:
+                    print(f"  ✓ Valuation regime change detected: {change.old_value} → {change.new_value}")
+
+                    # Generate alert
+                    alert = AlertGenerator.generate_valuation_regime_alert(
+                        ticker=ticker,
+                        change=change,
+                        current_percentile=current_percentile,
+                        current_metric_value=current_multiple,
+                        metric_type=metric_type,
+                        previous_percentile=previous_state.last_valuation_percentile,
+                        previous_metric_value=None,  # Could store this in state if needed
+                    )
+
+                    alerts.append(alert)
+
+                    # Save alert to database
+                    alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
+                    print(f"  ✓ Alert saved: {alert_id}")
+
+                # Update valuation state
+                self.state_tracker.update_state(
+                    user_id=user_id,
+                    entity_id=entity_id,
+                    valuation_regime=current_regime,
+                    valuation_percentile=current_percentile,
+                )
+            else:
+                print(f"  ⚠️  Valuation computation failed: {valuation_result.get('error')}")
+
+        # Update technical state
         self.state_tracker.update_state(
             user_id=user_id,
             entity_id=entity_id,
