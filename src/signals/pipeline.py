@@ -15,26 +15,46 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from src.config import config
+from src.email.delivery import EmailDeliveryService
 from src.reader import TimeSeriesReader
 from src.signals.alerts import Alert, AlertGenerator, AlertRepository
 from src.signals.state_tracker import StateChange, StateTracker
 from src.signals.technical import TechnicalSignals
+from src.signals.valuation import ValuationSignals
 
 
 class SignalPipeline:
     """Main signal evaluation pipeline."""
 
-    def __init__(self):
-        """Initialize pipeline components."""
+    def __init__(self, enable_email: bool = True):
+        """
+        Initialize pipeline components.
+
+        Args:
+            enable_email: Whether to send emails (default: True)
+        """
         self.reader = TimeSeriesReader()
         self.state_tracker = StateTracker()
         self.alert_repo = AlertRepository()
         self.db_conn = psycopg2.connect(config.database_url)
 
+        # Email delivery (optional)
+        self.enable_email = enable_email
+        self.email_service = None
+        if enable_email:
+            try:
+                self.email_service = EmailDeliveryService()
+                print("✓ Email delivery enabled")
+            except ValueError as e:
+                print(f"⚠️  Email delivery disabled: {e}")
+                self.enable_email = False
+
     def close(self):
         """Close all connections."""
         self.state_tracker.close()
         self.alert_repo.close()
+        if self.email_service:
+            self.email_service.close()
         if self.db_conn:
             self.db_conn.close()
 
@@ -77,6 +97,10 @@ class SignalPipeline:
         """
         Evaluate a single ticker for a user and detect material changes.
 
+        Evaluates both technical and valuation signals:
+        - Technical: 200-day MA crossovers (trend breaks)
+        - Valuation: Regime transitions (cheap/normal/expensive zones)
+
         Args:
             user_id: User UUID
             entity_id: Entity UUID
@@ -101,7 +125,7 @@ class SignalPipeline:
         # Compute technical signals
         df = TechnicalSignals.compute_all_technical_signals(df)
 
-        # Get latest signals
+        # Get latest technical signals
         latest = TechnicalSignals.get_latest_signals(df)
 
         if not latest:
@@ -111,6 +135,7 @@ class SignalPipeline:
         # Get previous state
         previous_state = self.state_tracker.get_state(user_id, entity_id, ticker)
 
+        # === Technical Signal Evaluation ===
         # Detect trend changes
         if latest.get("trend_position"):
             change = self.state_tracker.detect_trend_change(
@@ -135,7 +160,84 @@ class SignalPipeline:
                 alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
                 print(f"  ✓ Alert saved: {alert_id}")
 
-        # Update state for next evaluation
+                # Send email if enabled
+                if self.enable_email and self.email_service:
+                    user_email = self._get_user_email(user_id)
+                    if user_email:
+                        self.email_service.send_alert_email(
+                            user_id=user_id,
+                            entity_id=entity_id,
+                            user_email=user_email,
+                            alert=alert,
+                            alert_id=alert_id,
+                        )
+
+        # === Valuation Signal Evaluation ===
+        # Fetch valuation data (use longer history for percentile calculation)
+        valuation_start = end_date - timedelta(days=10 * 365)  # 10 years
+        valuation_df = self.reader.r2.get_timeseries("signals_valuation", ticker, valuation_start, end_date)
+
+        if not valuation_df.empty:
+            # Compute valuation signals
+            valuation_result = ValuationSignals.compute_valuation_signals(valuation_df, lookback_years=10)
+
+            if valuation_result['success']:
+                current_regime = valuation_result['regime']
+                current_percentile = valuation_result['current_percentile']
+                current_multiple = valuation_result['current_multiple']
+                metric_type = valuation_result['metric_type']
+
+                # Detect valuation regime change
+                change = self.state_tracker.detect_valuation_regime_change(
+                    previous_state,
+                    current_percentile,
+                    cheap_threshold=ValuationSignals.CHEAP_THRESHOLD,
+                    expensive_threshold=ValuationSignals.EXPENSIVE_THRESHOLD,
+                )
+
+                if change and change.should_alert:
+                    print(f"  ✓ Valuation regime change detected: {change.old_value} → {change.new_value}")
+
+                    # Generate alert
+                    alert = AlertGenerator.generate_valuation_regime_alert(
+                        ticker=ticker,
+                        change=change,
+                        current_percentile=current_percentile,
+                        current_metric_value=current_multiple,
+                        metric_type=metric_type,
+                        previous_percentile=previous_state.last_valuation_percentile,
+                        previous_metric_value=None,  # Could store this in state if needed
+                    )
+
+                    alerts.append(alert)
+
+                    # Save alert to database
+                    alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
+                    print(f"  ✓ Alert saved: {alert_id}")
+
+                    # Send email if enabled
+                    if self.enable_email and self.email_service:
+                        user_email = self._get_user_email(user_id)
+                        if user_email:
+                            self.email_service.send_alert_email(
+                                user_id=user_id,
+                                entity_id=entity_id,
+                                user_email=user_email,
+                                alert=alert,
+                                alert_id=alert_id,
+                            )
+
+                # Update valuation state
+                self.state_tracker.update_state(
+                    user_id=user_id,
+                    entity_id=entity_id,
+                    valuation_regime=current_regime,
+                    valuation_percentile=current_percentile,
+                )
+            else:
+                print(f"  ⚠️  Valuation computation failed: {valuation_result.get('error')}")
+
+        # Update technical state
         self.state_tracker.update_state(
             user_id=user_id,
             entity_id=entity_id,
@@ -144,6 +246,21 @@ class SignalPipeline:
         )
 
         return alerts
+
+    def _get_user_email(self, user_id: str) -> Optional[str]:
+        """
+        Get user email from database.
+
+        Args:
+            user_id: User UUID
+
+        Returns:
+            Email address or None
+        """
+        with self.db_conn.cursor() as cur:
+            cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
     def run_daily_evaluation(self) -> dict:
         """

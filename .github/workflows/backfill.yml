@@ -1,0 +1,94 @@
+name: Data Backfill
+
+# Manual workflow for initial data backfill or catch-up
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: 'Dataset to backfill (prices, fundamentals, technical, valuation)'
+        required: true
+        default: 'prices'
+        type: choice
+        options:
+          - prices
+          - fundamentals
+          - technical
+          - valuation
+
+      tickers:
+        description: 'Tickers to backfill (comma-separated, leave empty for all active)'
+        required: false
+        default: ''
+
+      start_date:
+        description: 'Start date (YYYY-MM-DD)'
+        required: false
+        default: ''
+
+      end_date:
+        description: 'End date (YYYY-MM-DD, defaults to today)'
+        required: false
+        default: ''
+
+jobs:
+  backfill:
+    name: Backfill ${{ github.event.inputs.dataset }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240  # 4 hours for large backfills
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run backfill
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          echo "Backfilling ${{ github.event.inputs.dataset }}..."
+          python scripts/backfill_from_dolt.py \
+            --dataset ${{ github.event.inputs.dataset }} \
+            ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '' }} \
+            ${{ github.event.inputs.start_date && format('--start-date {0}', github.event.inputs.start_date) || '' }} \
+            ${{ github.event.inputs.end_date && format('--end-date {0}', github.event.inputs.end_date) || '' }}
+
+      - name: Upload backfill logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-logs-${{ github.event.inputs.dataset }}-${{ github.run_number }}
+          path: |
+            logs/*.log
+            *.log
+          retention-days: 30
+
+      - name: Verify backfill results
+        if: success()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          echo "Verifying backfill results..."
+          python -c "
+          from src.reader import TimeSeriesReader
+          r = TimeSeriesReader()
+          tickers = r.list_available_tickers('${{ github.event.inputs.dataset }}')
+          print(f'✅ Dataset ${{ github.event.inputs.dataset }} contains {len(tickers)} tickers')
+          "

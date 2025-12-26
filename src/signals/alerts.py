@@ -144,17 +144,27 @@ class AlertGenerator:
         change: StateChange,
         current_percentile: float,
         current_metric_value: float,
-        metric_name: str = "P/E",
+        metric_type: str = "ev_revenue",
+        previous_percentile: Optional[float] = None,
+        previous_metric_value: Optional[float] = None,
     ) -> Alert:
         """
         Generate alert for valuation regime change (Alert Type 1).
+
+        Follows MVP plan specifications:
+        - Explicit EV/Revenue or EV/EBITDA labeling
+        - Percentile-based regime classification
+        - Clear entry/exit messaging
+        - Conservative, educational tone
 
         Args:
             ticker: Stock ticker
             change: StateChange object
             current_percentile: Current percentile (0-100)
             current_metric_value: Current valuation metric value
-            metric_name: Name of valuation metric (e.g., "P/E", "EV/EBITDA")
+            metric_type: 'ev_revenue' or 'ev_ebitda'
+            previous_percentile: Previous percentile (optional)
+            previous_metric_value: Previous metric value (optional)
 
         Returns:
             Structured Alert object
@@ -162,49 +172,74 @@ class AlertGenerator:
         old_regime = change.old_value
         new_regime = change.new_value
 
-        # Generate headline
+        # Map metric type to display label
+        metric_label = {
+            "ev_revenue": "EV/Revenue",
+            "ev_ebitda": "EV/EBITDA",
+        }.get(metric_type, "Valuation")
+
+        # Generate headline per MVP plan
         if new_regime == "cheap":
-            headline = "Entered historically cheap zone"
+            headline = "Valuation entered historically cheap zone"
         elif new_regime == "expensive":
-            headline = "Entered historically expensive zone"
+            headline = "Valuation entered historically rich zone"
         elif old_regime == "cheap":
-            headline = "Exited historically cheap zone"
+            headline = "Valuation exited historically cheap zone"
         elif old_regime == "expensive":
-            headline = "Exited historically expensive zone"
+            headline = "Valuation exited historically rich zone"
         else:
             headline = "Valuation regime changed"
 
-        what_changed = (
-            f"• {metric_name} moved to {current_percentile:.0f}th percentile of 10-year range\n"
-            f"• Current {metric_name}: {current_metric_value:.2f}"
-        )
+        # What changed section
+        what_changed_items = [
+            f"{metric_label} moved from {previous_percentile:.0f}th percentile → {current_percentile:.0f}th percentile"
+            if previous_percentile is not None
+            else f"{metric_label} now at {current_percentile:.0f}th percentile of historical range"
+        ]
+        what_changed = "\n".join(f"• {item}" for item in what_changed_items)
 
+        # Why it matters section (per MVP plan specifications)
         if new_regime == "cheap":
-            why_it_matters = (
-                "• Stock is trading at valuations seen only 20% of the time historically\n"
-                "• May represent an attractive entry point for value investors\n"
-                "• Consider whether business fundamentals justify the discount"
-            )
+            why_it_matters_items = [
+                "Stock is trading at the lower end of its own historical valuation range, which can increase margin of safety."
+            ]
         elif new_regime == "expensive":
-            why_it_matters = (
-                "• Stock is trading at valuations seen only 20% of the time historically\n"
-                "• May indicate elevated expectations or frothy sentiment\n"
-                "• Consider whether growth prospects justify the premium"
-            )
-        else:  # Exiting cheap/expensive
-            why_it_matters = (
-                f"• Stock has moved out of the {old_regime} zone\n"
-                "• Valuation has normalized relative to historical range\n"
-                "• Re-evaluate your investment thesis with this new regime"
-            )
+            why_it_matters_items = [
+                "Stock is trading at the higher end of its historical valuation range; future returns may rely on continued strong execution."
+            ]
+        elif old_regime == "cheap":
+            why_it_matters_items = [
+                "Valuation is no longer in a historically discounted range, reducing margin of safety."
+            ]
+        elif old_regime == "expensive":
+            why_it_matters_items = [
+                "Valuation is no longer in a historically premium range."
+            ]
+        else:
+            why_it_matters_items = [
+                "Valuation has moved to a different historical zone.",
+                "Re-evaluate your investment thesis with this change."
+            ]
+        why_it_matters = "\n".join(f"• {item}" for item in why_it_matters_items)
 
-        before_vs_now = f"• Then: {old_regime.capitalize()} zone\n" f"• Now: {new_regime.capitalize()} zone ({current_percentile:.0f}th percentile)"
+        # Before vs now section
+        before_vs_now_items = [
+            f"Multiple: {previous_metric_value:.2f}x → {current_metric_value:.2f}x"
+            if previous_metric_value is not None
+            else f"Multiple: {current_metric_value:.2f}x",
+            f"Percentile: {previous_percentile:.0f} → {current_percentile:.0f}"
+            if previous_percentile is not None
+            else f"Percentile: {current_percentile:.0f}"
+        ]
+        before_vs_now = "\n".join(f"• {item}" for item in before_vs_now_items)
 
-        what_didnt_change = (
-            "• Underlying business operations continue\n"
-            "• This is a relative valuation signal, not absolute quality assessment\n"
-            "• Historical ranges are backward-looking"
-        )
+        # What didn't change section
+        what_didnt_change_items = [
+            f"Metric used: {metric_label}",
+            "This is a relative valuation signal based on the company's own history",
+            "Underlying business fundamentals may have changed separately"
+        ]
+        what_didnt_change = "\n".join(f"• {item}" for item in what_didnt_change_items)
 
         return Alert(
             ticker=ticker,
@@ -217,8 +252,11 @@ class AlertGenerator:
             timestamp=datetime.now(),
             data_snapshot={
                 "current_percentile": current_percentile,
-                "metric_value": current_metric_value,
-                "metric_name": metric_name,
+                "previous_percentile": previous_percentile,
+                "current_metric_value": current_metric_value,
+                "previous_metric_value": previous_metric_value,
+                "metric_type": metric_type,
+                "metric_label": metric_label,
                 "old_regime": old_regime,
                 "new_regime": new_regime,
             },

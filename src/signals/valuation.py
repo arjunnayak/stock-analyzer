@@ -322,6 +322,263 @@ class ValuationSignals:
         }
 
     @staticmethod
+    def compute_ttm_revenue(fundamentals_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute trailing twelve month (TTM) revenue from quarterly data.
+
+        Args:
+            fundamentals_df: DataFrame with quarterly fundamental data
+                            Expected columns: date, sales, period
+
+        Returns:
+            DataFrame with columns: date, ttm_revenue
+        """
+        if fundamentals_df.empty or 'sales' not in fundamentals_df.columns:
+            return pd.DataFrame(columns=['date', 'ttm_revenue'])
+
+        # Sort by date
+        df = fundamentals_df.copy()
+        df = df.sort_values('date')
+
+        # Only use quarterly data (period = 'Q')
+        if 'period' in df.columns:
+            df = df[df['period'].str.contains('Q', na=False)]
+
+        if len(df) < 4:
+            return pd.DataFrame(columns=['date', 'ttm_revenue'])
+
+        # Compute rolling 4-quarter sum
+        df['ttm_revenue'] = df['sales'].rolling(window=4, min_periods=4).sum()
+
+        return df[['date', 'ttm_revenue']].copy()
+
+    @staticmethod
+    def compute_ttm_ebitda(fundamentals_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute trailing twelve month (TTM) EBITDA from quarterly data.
+
+        EBITDA = income_before_depreciation (if available)
+              OR net_income + interest_expense + income_taxes + depreciation_and_amortization
+
+        Args:
+            fundamentals_df: DataFrame with quarterly fundamental data
+
+        Returns:
+            DataFrame with columns: date, ttm_ebitda
+        """
+        if fundamentals_df.empty:
+            return pd.DataFrame(columns=['date', 'ttm_ebitda'])
+
+        df = fundamentals_df.copy()
+        df = df.sort_values('date')
+
+        # Only use quarterly data
+        if 'period' in df.columns:
+            df = df[df['period'].str.contains('Q', na=False)]
+
+        if len(df) < 4:
+            return pd.DataFrame(columns=['date', 'ttm_ebitda'])
+
+        # Use income_before_depreciation if available (this is EBITDA)
+        if 'income_before_depreciation' in df.columns:
+            df['ebitda_quarterly'] = df['income_before_depreciation']
+        else:
+            # Fallback: compute from components
+            # EBITDA = Net Income + Interest + Taxes + D&A
+            df['ebitda_quarterly'] = (
+                df.get('net_income', 0) +
+                df.get('interest_expense', 0).fillna(0) +
+                df.get('income_taxes', 0).fillna(0) +
+                df.get('depreciation_and_amortization', 0).fillna(0)
+            )
+
+        # Compute rolling 4-quarter sum
+        df['ttm_ebitda'] = df['ebitda_quarterly'].rolling(window=4, min_periods=4).sum()
+
+        return df[['date', 'ttm_ebitda']].copy()
+
+    @staticmethod
+    def compute_enterprise_value(
+        prices_df: pd.DataFrame,
+        fundamentals_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Compute enterprise value time series.
+
+        EV = Market Cap + Total Debt - Cash
+        where Market Cap = Price * Shares Outstanding
+
+        Args:
+            prices_df: DataFrame with daily price data (date, close)
+            fundamentals_df: DataFrame with quarterly fundamental data
+
+        Returns:
+            DataFrame with columns: date, enterprise_value, market_cap, shares_outstanding
+        """
+        if prices_df.empty or fundamentals_df.empty:
+            return pd.DataFrame(columns=['date', 'enterprise_value', 'market_cap', 'shares_outstanding'])
+
+        # Get shares outstanding from balance sheet equity
+        if 'shares_outstanding' not in fundamentals_df.columns:
+            return pd.DataFrame(columns=['date', 'enterprise_value', 'market_cap', 'shares_outstanding'])
+
+        # Forward-fill quarterly data to daily frequency
+        # This assumes balance sheet metrics persist until next report
+        quarterly_data = fundamentals_df[['date', 'shares_outstanding']].copy()
+        quarterly_data = quarterly_data.sort_values('date').drop_duplicates('date')
+
+        # Get total debt (current + long-term debt)
+        total_debt = pd.Series(0, index=quarterly_data.index)
+        if 'long_term_debt' in fundamentals_df.columns:
+            debt_df = fundamentals_df[['date', 'long_term_debt']].copy()
+            if 'current_portion_long_term_debt' in fundamentals_df.columns:
+                debt_df = fundamentals_df[['date', 'long_term_debt', 'current_portion_long_term_debt']].copy()
+                debt_df['total_debt'] = (
+                    debt_df['long_term_debt'].fillna(0) +
+                    debt_df['current_portion_long_term_debt'].fillna(0)
+                )
+            else:
+                debt_df['total_debt'] = debt_df['long_term_debt'].fillna(0)
+
+            quarterly_data = quarterly_data.merge(
+                debt_df[['date', 'total_debt']], on='date', how='left'
+            )
+        else:
+            quarterly_data['total_debt'] = 0
+
+        # Get cash
+        if 'cash_and_equivalents' in fundamentals_df.columns:
+            cash_df = fundamentals_df[['date', 'cash_and_equivalents']].copy()
+            quarterly_data = quarterly_data.merge(
+                cash_df, on='date', how='left'
+            )
+        else:
+            quarterly_data['cash_and_equivalents'] = 0
+
+        # Merge with daily prices using forward-fill
+        prices_daily = prices_df[['date', 'close']].copy()
+        prices_daily = prices_daily.sort_values('date')
+
+        # Create date range and merge
+        combined = pd.merge_asof(
+            prices_daily,
+            quarterly_data,
+            on='date',
+            direction='backward'
+        )
+
+        # Compute market cap and EV
+        combined['shares_outstanding'] = combined['shares_outstanding'].fillna(0)
+        combined['total_debt'] = combined['total_debt'].fillna(0)
+        combined['cash_and_equivalents'] = combined['cash_and_equivalents'].fillna(0)
+
+        combined['market_cap'] = combined['close'] * combined['shares_outstanding']
+        combined['enterprise_value'] = (
+            combined['market_cap'] +
+            combined['total_debt'] -
+            combined['cash_and_equivalents']
+        )
+
+        # Filter out invalid values
+        combined.loc[combined['shares_outstanding'] <= 0, ['market_cap', 'enterprise_value']] = None
+
+        return combined[['date', 'enterprise_value', 'market_cap', 'shares_outstanding']].copy()
+
+    @staticmethod
+    def compute_ev_revenue(
+        prices_df: pd.DataFrame,
+        fundamentals_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Compute EV/Revenue multiple time series.
+
+        Args:
+            prices_df: DataFrame with daily price data
+            fundamentals_df: DataFrame with quarterly fundamental data
+
+        Returns:
+            DataFrame with columns: date, ev_revenue, ttm_revenue
+        """
+        # Compute TTM revenue
+        ttm_revenue_df = ValuationSignals.compute_ttm_revenue(fundamentals_df)
+        if ttm_revenue_df.empty:
+            return pd.DataFrame(columns=['date', 'ev_revenue', 'ttm_revenue'])
+
+        # Compute enterprise value
+        ev_df = ValuationSignals.compute_enterprise_value(prices_df, fundamentals_df)
+        if ev_df.empty:
+            return pd.DataFrame(columns=['date', 'ev_revenue', 'ttm_revenue'])
+
+        # Merge EV with TTM revenue using forward-fill
+        ev_df = ev_df.sort_values('date')
+        ttm_revenue_df = ttm_revenue_df.sort_values('date')
+
+        combined = pd.merge_asof(
+            ev_df[['date', 'enterprise_value']],
+            ttm_revenue_df,
+            on='date',
+            direction='backward'
+        )
+
+        # Compute EV/Revenue multiple
+        # Set to None if revenue is zero or negative
+        combined['ev_revenue'] = None
+        valid_mask = (combined['ttm_revenue'] > 0) & (combined['enterprise_value'].notna())
+        combined.loc[valid_mask, 'ev_revenue'] = (
+            combined.loc[valid_mask, 'enterprise_value'] /
+            combined.loc[valid_mask, 'ttm_revenue']
+        )
+
+        return combined[['date', 'ev_revenue', 'ttm_revenue']].copy()
+
+    @staticmethod
+    def compute_ev_ebitda(
+        prices_df: pd.DataFrame,
+        fundamentals_df: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Compute EV/EBITDA multiple time series.
+
+        Args:
+            prices_df: DataFrame with daily price data
+            fundamentals_df: DataFrame with quarterly fundamental data
+
+        Returns:
+            DataFrame with columns: date, ev_ebitda, ttm_ebitda, enterprise_value, market_cap, shares_outstanding
+        """
+        # Compute TTM EBITDA
+        ttm_ebitda_df = ValuationSignals.compute_ttm_ebitda(fundamentals_df)
+        if ttm_ebitda_df.empty:
+            return pd.DataFrame(columns=['date', 'ev_ebitda', 'ttm_ebitda', 'enterprise_value', 'market_cap', 'shares_outstanding'])
+
+        # Compute enterprise value
+        ev_df = ValuationSignals.compute_enterprise_value(prices_df, fundamentals_df)
+        if ev_df.empty:
+            return pd.DataFrame(columns=['date', 'ev_ebitda', 'ttm_ebitda', 'enterprise_value', 'market_cap', 'shares_outstanding'])
+
+        # Merge EV with TTM EBITDA using forward-fill
+        ev_df = ev_df.sort_values('date')
+        ttm_ebitda_df = ttm_ebitda_df.sort_values('date')
+
+        combined = pd.merge_asof(
+            ev_df,
+            ttm_ebitda_df,
+            on='date',
+            direction='backward'
+        )
+
+        # Compute EV/EBITDA multiple
+        # Set to None if EBITDA is zero or negative
+        combined['ev_ebitda'] = None
+        valid_mask = (combined['ttm_ebitda'] > 0) & (combined['enterprise_value'].notna())
+        combined.loc[valid_mask, 'ev_ebitda'] = (
+            combined.loc[valid_mask, 'enterprise_value'] /
+            combined.loc[valid_mask, 'ttm_ebitda']
+        )
+
+        return combined[['date', 'ev_ebitda', 'ttm_ebitda', 'enterprise_value', 'market_cap', 'shares_outstanding']].copy()
+
+    @staticmethod
     def get_latest_valuation_signal(
         valuation_df: pd.DataFrame,
         lookback_years: int = 10
