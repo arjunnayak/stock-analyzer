@@ -138,6 +138,28 @@ class TechnicalSignals:
         return df
 
     @staticmethod
+    def compute_sma_200_only(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute only SMA 200 for batch metrics storage.
+
+        This is a simplified version for batch computation that only calculates
+        SMA 200 and returns minimal columns for efficient storage.
+
+        Args:
+            df: Price DataFrame with 'date', 'close' columns
+
+        Returns:
+            DataFrame with 'date', 'close', 'sma_200' columns
+        """
+        df = df.copy()
+
+        # Compute SMA 200
+        df["sma_200"] = df["close"].rolling(window=200).mean()
+
+        # Return only relevant columns for storage
+        return df[["date", "close", "sma_200"]]
+
+    @staticmethod
     def get_latest_signals(df: pd.DataFrame) -> dict:
         """
         Get the most recent signal values.

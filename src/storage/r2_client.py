@@ -190,15 +190,17 @@ class R2Client:
         # Concatenate and filter
         result = pd.concat(dfs, ignore_index=True)
 
-        # Filter to exact date range
-        if "date" in result.columns:
-            result["date"] = pd.to_datetime(result["date"])
-            result = result[
-                (result["date"] >= pd.Timestamp(start_date))
-                & (result["date"] <= pd.Timestamp(end_date))
-            ]
+        # Determine date column (fundamentals use 'period_end', others use 'date')
+        date_col = "period_end" if "period_end" in result.columns else "date"
 
-        result = result.sort_values("date").reset_index(drop=True)
+        if date_col in result.columns:
+            result[date_col] = pd.to_datetime(result[date_col])
+            result = result[
+                (result[date_col] >= pd.Timestamp(start_date))
+                & (result[date_col] <= pd.Timestamp(end_date))
+            ]
+            result = result.sort_values(date_col).reset_index(drop=True)
+
         print(f"✓ Retrieved {len(result)} rows for {ticker} ({start_date} to {end_date})")
         return result
 

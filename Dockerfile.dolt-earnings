@@ -1,0 +1,9 @@
+FROM dolthub/dolt-sql-server:latest
+
+RUN dolt config --global --add user.email "arjunglobal09@gmail.com"
+RUN dolt config --global --add user.name "Arjun Nayak"
+
+WORKDIR /var/lib/dolt
+RUN dolt clone post-no-preference/earnings
+
+EXPOSE 3306

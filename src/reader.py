@@ -122,6 +122,30 @@ class TimeSeriesReader:
 
         return result
 
+    def get_fundamentals(
+        self,
+        ticker: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> pd.DataFrame:
+        """
+        Get fundamental data for a ticker.
+
+        Args:
+            ticker: Stock ticker
+            start_date: Start date (defaults to 5 years ago)
+            end_date: End date (defaults to today)
+
+        Returns:
+            DataFrame with fundamental data
+        """
+        if end_date is None:
+            end_date = date.today()
+        if start_date is None:
+            start_date = end_date - timedelta(days=5 * 365)
+
+        return self.r2.get_timeseries("fundamentals", ticker, start_date, end_date)
+
     def list_available_tickers(self, dataset: str = "prices") -> list[str]:
         """
         List all tickers that have data in storage.

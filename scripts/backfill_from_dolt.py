@@ -55,8 +55,8 @@ class DoltClient:
     def __init__(
         self,
         host: str = "localhost",
-        port: int = 3306,
-        database: str = "market_data",
+        stocks_port: int = 3306,
+        earnings_port: int = 3307,
         user: str = "root",
         password: str = "",
     ):
@@ -65,35 +65,57 @@ class DoltClient:
 
         Args:
             host: Database host (default: localhost)
-            port: Database port (default: 3306)
-            database: Database name (default: market_data)
+            stocks_port: Stocks database port (default: 3306)
+            earnings_port: Earnings database port (default: 3307)
             user: Database user (default: root)
             password: Database password (default: empty)
         """
-        self.config = {
-            "host": host,
-            "port": port,
-            "database": database,
-            "user": user,
-            "password": password,
-        }
-        self.conn = None
+        self.host = host
+        self.user = user
+        self.password = password
+        self.stocks_port = stocks_port
+        self.earnings_port = earnings_port
+        self.stocks_conn = None
+        self.earnings_conn = None
 
     def connect(self):
-        """Establish database connection."""
+        """Establish database connections."""
         try:
-            self.conn = mysql.connector.connect(**self.config)
-            print(f"✓ Connected to Dolt database: {self.config['database']}")
+            self.stocks_conn = mysql.connector.connect(
+                host=self.host,
+                port=self.stocks_port,
+                database="stocks",
+                user=self.user,
+                password=self.password,
+            )
+            print(f"✓ Connected to Dolt stocks database (port {self.stocks_port})")
+        except MySQLError as e:
+            print(f"✗ Failed to connect to stocks DB: {e}")
+            return False
+
+        try:
+            self.earnings_conn = mysql.connector.connect(
+                host=self.host,
+                port=self.earnings_port,
+                database="earnings",
+                user=self.user,
+                password=self.password,
+            )
+            print(f"✓ Connected to Dolt earnings database (port {self.earnings_port})")
             return True
         except MySQLError as e:
-            print(f"✗ Failed to connect to Dolt: {e}")
+            print(f"✗ Failed to connect to earnings DB: {e}")
+            if self.stocks_conn and self.stocks_conn.is_connected():
+                self.stocks_conn.close()
             return False
 
     def disconnect(self):
-        """Close database connection."""
-        if self.conn and self.conn.is_connected():
-            self.conn.close()
-            print("✓ Disconnected from Dolt")
+        """Close database connections."""
+        if self.stocks_conn and self.stocks_conn.is_connected():
+            self.stocks_conn.close()
+        if self.earnings_conn and self.earnings_conn.is_connected():
+            self.earnings_conn.close()
+        print("✓ Disconnected from Dolt databases")
 
     def __enter__(self):
         self.connect()
@@ -109,20 +131,20 @@ class DoltClient:
         end_date: Optional[date] = None,
     ) -> pd.DataFrame:
         """
-        Fetch price data from Dolt database.
+        Fetch price data from Dolt stocks database (ohlcv table).
 
         Args:
-            ticker: Stock ticker
+            ticker: Stock ticker (act_symbol)
             start_date: Start date (optional)
             end_date: End date (optional)
 
         Returns:
-            DataFrame with price data
+            DataFrame with price data (date, open, high, low, close, volume)
         """
         query = """
-            SELECT date, open, high, low, close, adj_close, volume
-            FROM prices
-            WHERE ticker = %s
+            SELECT date, open, high, low, close, volume
+            FROM ohlcv
+            WHERE act_symbol = %s
         """
         params = [ticker]
 
@@ -137,7 +159,7 @@ class DoltClient:
         query += " ORDER BY date ASC"
 
         try:
-            df = pd.read_sql(query, self.conn, params=params)
+            df = pd.read_sql(query, self.stocks_conn, params=params)
             df["date"] = pd.to_datetime(df["date"])
             return df
         except Exception as e:
@@ -151,10 +173,10 @@ class DoltClient:
         end_date: Optional[date] = None,
     ) -> pd.DataFrame:
         """
-        Fetch fundamental data from Dolt database.
+        Fetch fundamental data from Dolt earnings database (income_statement table).
 
         Args:
-            ticker: Stock ticker
+            ticker: Stock ticker (act_symbol)
             start_date: Start date (optional)
             end_date: End date (optional)
 
@@ -163,59 +185,55 @@ class DoltClient:
         """
         query = """
             SELECT
-                period_end,
-                fiscal_year,
-                fiscal_quarter,
-                revenue,
+                date as period_end,
+                period,
+                sales as revenue,
                 gross_profit,
-                operating_income,
+                income_after_depreciation_and_amortization as operating_income,
                 net_income,
-                eps_diluted,
-                shares_diluted,
-                total_assets,
-                total_liabilities,
-                cash_and_equivalents,
-                operating_cash_flow,
-                capex,
-                free_cash_flow
-            FROM fundamentals
-            WHERE ticker = %s
+                diluted_net_eps,
+                average_shares,
+                pretax_income,
+                income_taxes,
+                depreciation_and_amortization,
+                cost_of_goods,
+                selling_administrative_depreciation_amortization_expenses,
+                income_from_continuing_operations
+            FROM income_statement
+            WHERE act_symbol = %s
         """
         params = [ticker]
 
         if start_date:
-            query += " AND period_end >= %s"
+            query += " AND date >= %s"
             params.append(start_date)
 
         if end_date:
-            query += " AND period_end <= %s"
+            query += " AND date <= %s"
             params.append(end_date)
 
-        query += " ORDER BY period_end ASC"
+        query += " ORDER BY date ASC"
 
         try:
-            df = pd.read_sql(query, self.conn, params=params)
+            df = pd.read_sql(query, self.earnings_conn, params=params)
             df["period_end"] = pd.to_datetime(df["period_end"])
             return df
         except Exception as e:
             print(f"✗ Error fetching fundamentals for {ticker}: {e}")
             return pd.DataFrame()
 
-    def get_available_tickers(self, table: str = "prices") -> list[str]:
+    def get_available_tickers(self) -> list[str]:
         """
-        Get list of all available tickers in database.
-
-        Args:
-            table: Table to query (default: prices)
+        Get list of all available tickers in stocks database.
 
         Returns:
             List of ticker symbols
         """
-        query = f"SELECT DISTINCT ticker FROM {table} ORDER BY ticker"
+        query = "SELECT DISTINCT act_symbol FROM ohlcv ORDER BY act_symbol"
 
         try:
-            df = pd.read_sql(query, self.conn)
-            return df["ticker"].tolist()
+            df = pd.read_sql(query, self.stocks_conn)
+            return df["act_symbol"].tolist()
         except Exception as e:
             print(f"✗ Error fetching tickers: {e}")
             return []
@@ -388,8 +406,8 @@ def parse_args():
 
     # Dolt connection
     parser.add_argument("--dolt-host", default="localhost", help="Dolt host (default: localhost)")
-    parser.add_argument("--dolt-port", type=int, default=3306, help="Dolt port (default: 3306)")
-    parser.add_argument("--dolt-database", default="market_data", help="Dolt database name (default: market_data)")
+    parser.add_argument("--stocks-port", type=int, default=3306, help="Stocks DB port (default: 3306)")
+    parser.add_argument("--earnings-port", type=int, default=3307, help="Earnings DB port (default: 3307)")
     parser.add_argument("--dolt-user", default="root", help="Dolt user (default: root)")
     parser.add_argument("--dolt-password", default="", help="Dolt password (default: empty)")
 
@@ -426,8 +444,8 @@ def main():
         # Connect to get ticker list
         with DoltClient(
             host=args.dolt_host,
-            port=args.dolt_port,
-            database=args.dolt_database,
+            stocks_port=args.stocks_port,
+            earnings_port=args.earnings_port,
             user=args.dolt_user,
             password=args.dolt_password,
         ) as dolt:
@@ -441,8 +459,8 @@ def main():
     # Connect to Dolt and R2
     dolt_client = DoltClient(
         host=args.dolt_host,
-        port=args.dolt_port,
-        database=args.dolt_database,
+        stocks_port=args.stocks_port,
+        earnings_port=args.earnings_port,
         user=args.dolt_user,
         password=args.dolt_password,
     )
