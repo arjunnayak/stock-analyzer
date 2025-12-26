@@ -1,0 +1,71 @@
+name: Compute Valuation Metrics
+
+# Run weekly to backfill/update historical valuation metrics
+on:
+  schedule:
+    # Run every Sunday at 2 AM UTC
+    - cron: '0 2 * * 0'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Specific tickers to compute (comma-separated, leave empty for all)'
+        required: false
+        default: ''
+      force:
+        description: 'Force recompute all dates (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  compute-metrics:
+    name: Compute Valuation Metrics
+    runs-on: ubuntu-latest
+    timeout-minutes: 120  # 2 hours for batch processing
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Compute valuation metrics
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          echo "Computing valuation metrics..."
+          python scripts/compute_metrics.py \
+            --dataset valuation \
+            ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '' }} \
+            ${{ github.event.inputs.force == 'true' && '--force' || '' }}
+
+      - name: Upload computation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-computation-logs-${{ github.run_number }}
+          path: |
+            logs/*.log
+            *.log
+          retention-days: 14
+
+      - name: Report summary
+        if: success()
+        run: |
+          echo "✅ Valuation metrics computation completed successfully"
+          echo "Artifacts available for 14 days"
