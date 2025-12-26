@@ -1,4 +1,4 @@
-.PHONY: help setup start stop restart logs clean test config
+.PHONY: help setup start stop restart logs clean test config ingest read test-pipeline test-signals run-daily-eval test-mock backfill
 
 help: ## Show this help message
 	@echo "Stock Analyzer - Development Commands"
@@ -94,3 +94,45 @@ install: ## Install Python dependencies
 
 update-deps: ## Update Python dependencies
 	uv lock --upgrade
+
+# Data pipeline commands
+
+test-mock: ## Run mock data pipeline test (no Docker/API required)
+	@echo "🎭 Running mock pipeline test..."
+	python scripts/test_mock_pipeline.py
+
+test-pipeline: ## Run comprehensive pipeline test (config, R2, EODHD, ingest, read)
+	@echo "🧪 Running pipeline test..."
+	python scripts/test_ingest_and_read.py
+
+ingest: ## Ingest price data for test tickers
+	@echo "📥 Ingesting price data..."
+	python -m src.ingest.ingest_prices
+
+read: ## Read and display stored data
+	@echo "📖 Reading stored data..."
+	python -m src.reader
+
+test-r2: ## Test R2/MinIO connection
+	python -m src.storage.r2_client
+
+test-eodhd: ## Test EODHD API connection
+	python -m src.ingest.eodhd_client
+
+# Backfill from Dolt database
+
+backfill: ## Backfill data from Dolt (requires --tickers or --ticker-file)
+	@echo "💾 Running backfill from Dolt..."
+	@echo "Usage: make backfill ARGS='--tickers AAPL MSFT'"
+	@echo "   or: make backfill ARGS='--ticker-file tickers.txt'"
+	python scripts/backfill_from_dolt.py $(ARGS)
+
+# Signal computation and alerts
+
+test-signals: ## Run signal computation and alert generation tests
+	@echo "🔍 Running signal tests..."
+	python scripts/test_signals.py
+
+run-daily-eval: ## Run daily signal evaluation (main batch job)
+	@echo "📊 Running daily evaluation..."
+	python -m src.signals.pipeline
