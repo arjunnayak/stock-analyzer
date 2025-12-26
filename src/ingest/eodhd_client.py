@@ -59,7 +59,7 @@ class EODHDClient:
         try:
             # EODHD API call
             symbol = f"{ticker}.{exchange}"
-            data = self.client.get_prices_eod(
+            data = self.client.get_eod_historical_stock_market_data(
                 symbol=symbol,
                 from_date=start_date.strftime("%Y-%m-%d"),
                 to_date=end_date.strftime("%Y-%m-%d"),
