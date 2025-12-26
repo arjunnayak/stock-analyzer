@@ -15,6 +15,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from src.config import config
+from src.email.delivery import EmailDeliveryService
 from src.reader import TimeSeriesReader
 from src.signals.alerts import Alert, AlertGenerator, AlertRepository
 from src.signals.state_tracker import StateChange, StateTracker
@@ -25,17 +26,35 @@ from src.signals.valuation import ValuationSignals
 class SignalPipeline:
     """Main signal evaluation pipeline."""
 
-    def __init__(self):
-        """Initialize pipeline components."""
+    def __init__(self, enable_email: bool = True):
+        """
+        Initialize pipeline components.
+
+        Args:
+            enable_email: Whether to send emails (default: True)
+        """
         self.reader = TimeSeriesReader()
         self.state_tracker = StateTracker()
         self.alert_repo = AlertRepository()
         self.db_conn = psycopg2.connect(config.database_url)
 
+        # Email delivery (optional)
+        self.enable_email = enable_email
+        self.email_service = None
+        if enable_email:
+            try:
+                self.email_service = EmailDeliveryService()
+                print("✓ Email delivery enabled")
+            except ValueError as e:
+                print(f"⚠️  Email delivery disabled: {e}")
+                self.enable_email = False
+
     def close(self):
         """Close all connections."""
         self.state_tracker.close()
         self.alert_repo.close()
+        if self.email_service:
+            self.email_service.close()
         if self.db_conn:
             self.db_conn.close()
 
@@ -141,6 +160,18 @@ class SignalPipeline:
                 alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
                 print(f"  ✓ Alert saved: {alert_id}")
 
+                # Send email if enabled
+                if self.enable_email and self.email_service:
+                    user_email = self._get_user_email(user_id)
+                    if user_email:
+                        self.email_service.send_alert_email(
+                            user_id=user_id,
+                            entity_id=entity_id,
+                            user_email=user_email,
+                            alert=alert,
+                            alert_id=alert_id,
+                        )
+
         # === Valuation Signal Evaluation ===
         # Fetch valuation data (use longer history for percentile calculation)
         valuation_start = end_date - timedelta(days=10 * 365)  # 10 years
@@ -184,6 +215,18 @@ class SignalPipeline:
                     alert_id = self.alert_repo.save_alert(user_id, entity_id, alert)
                     print(f"  ✓ Alert saved: {alert_id}")
 
+                    # Send email if enabled
+                    if self.enable_email and self.email_service:
+                        user_email = self._get_user_email(user_id)
+                        if user_email:
+                            self.email_service.send_alert_email(
+                                user_id=user_id,
+                                entity_id=entity_id,
+                                user_email=user_email,
+                                alert=alert,
+                                alert_id=alert_id,
+                            )
+
                 # Update valuation state
                 self.state_tracker.update_state(
                     user_id=user_id,
@@ -203,6 +246,21 @@ class SignalPipeline:
         )
 
         return alerts
+
+    def _get_user_email(self, user_id: str) -> Optional[str]:
+        """
+        Get user email from database.
+
+        Args:
+            user_id: User UUID
+
+        Returns:
+            Email address or None
+        """
+        with self.db_conn.cursor() as cur:
+            cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
     def run_daily_evaluation(self) -> dict:
         """
