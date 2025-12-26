@@ -3,7 +3,7 @@
 Backfill complete data for UBER (end-to-end test).
 
 This script will:
-1. Ingest historical price data from EODHD
+1. Ingest historical price data from EODHD or Dolt
 2. Ingest fundamental data (if available)
 3. Compute technical signals (SMA 200)
 4. Compute valuation signals (EV/Revenue, EV/EBITDA)
@@ -11,7 +11,11 @@ This script will:
 6. Test signal evaluation
 
 Usage:
+    # Using EODHD (requires API key, limited requests):
     python scripts/backfill_uber.py [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
+
+    # Using Dolt (free, requires Dolt running locally):
+    python scripts/backfill_uber.py --use-dolt [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
 """
 
 import argparse
@@ -21,12 +25,183 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import pandas as pd
+
 from src.config import config
 from src.ingest.ingest_prices import PriceIngester
 from src.reader import TimeSeriesReader
 from src.signals.compute import MetricsComputer
 from src.signals.technical import TechnicalSignals
 from src.signals.valuation import ValuationSignals
+from src.storage.r2_client import R2Client
+
+# Dolt imports (optional)
+try:
+    import mysql.connector
+    from mysql.connector import Error as MySQLError
+    DOLT_AVAILABLE = True
+except ImportError:
+    DOLT_AVAILABLE = False
+
+
+class DoltClient:
+    """Lightweight Dolt client for reading price and fundamental data."""
+
+    def __init__(self, host: str = "localhost", stocks_port: int = 3306, earnings_port: int = 3307):
+        self.host = host
+        self.stocks_port = stocks_port
+        self.earnings_port = earnings_port
+        self.stocks_conn = None
+        self.earnings_conn = None
+
+    def connect(self):
+        """Connect to Dolt databases."""
+        try:
+            self.stocks_conn = mysql.connector.connect(
+                host=self.host, port=self.stocks_port, database="stocks", user="root", password=""
+            )
+            print(f"✓ Connected to Dolt stocks DB (port {self.stocks_port})")
+        except MySQLError as e:
+            print(f"✗ Failed to connect to stocks DB: {e}")
+            return False
+
+        try:
+            self.earnings_conn = mysql.connector.connect(
+                host=self.host, port=self.earnings_port, database="earnings", user="root", password=""
+            )
+            print(f"✓ Connected to Dolt earnings DB (port {self.earnings_port})")
+            return True
+        except MySQLError as e:
+            print(f"⚠️  Failed to connect to earnings DB: {e}")
+            # Continue without earnings
+            return True  # Stocks DB is enough for prices
+
+    def disconnect(self):
+        """Disconnect from Dolt databases."""
+        if self.stocks_conn and self.stocks_conn.is_connected():
+            self.stocks_conn.close()
+        if self.earnings_conn and self.earnings_conn.is_connected():
+            self.earnings_conn.close()
+
+    def get_prices(self, ticker: str, start_date: date, end_date: date) -> pd.DataFrame:
+        """Fetch price data from Dolt ohlcv table."""
+        query = """
+            SELECT date, open, high, low, close, volume
+            FROM ohlcv
+            WHERE act_symbol = %s AND date >= %s AND date <= %s
+            ORDER BY date ASC
+        """
+        df = pd.read_sql(query, self.stocks_conn, params=[ticker, start_date, end_date])
+        df["date"] = pd.to_datetime(df["date"])
+        # Add adj_close (assume same as close if not available)
+        if "adj_close" not in df.columns:
+            df["adj_close"] = df["close"]
+        return df
+
+    def get_fundamentals(self, ticker: str, start_date: date, end_date: date) -> pd.DataFrame:
+        """Fetch fundamental data from Dolt income_statement table."""
+        if not self.earnings_conn or not self.earnings_conn.is_connected():
+            return pd.DataFrame()
+
+        query = """
+            SELECT
+                date as period_end,
+                period,
+                sales as revenue,
+                gross_profit,
+                income_after_depreciation_and_amortization as operating_income,
+                net_income,
+                diluted_net_eps,
+                average_shares,
+                pretax_income,
+                income_taxes,
+                depreciation_and_amortization,
+                cost_of_goods,
+                selling_administrative_depreciation_amortization_expenses,
+                income_from_continuing_operations
+            FROM income_statement
+            WHERE act_symbol = %s AND date >= %s AND date <= %s
+            ORDER BY date ASC
+        """
+        df = pd.read_sql(query, self.earnings_conn, params=[ticker, start_date, end_date])
+        df["period_end"] = pd.to_datetime(df["period_end"])
+        return df
+
+
+def step_1_ingest_prices_from_dolt(ticker: str, start_date: date, end_date: date, dolt: DoltClient):
+    """Step 1: Ingest price data from Dolt."""
+    print("\n" + "=" * 70)
+    print("STEP 1: Ingest Price Data (from Dolt)")
+    print("=" * 70)
+
+    r2 = R2Client()
+
+    print(f"Fetching {ticker} price data from Dolt...")
+    print(f"Date range: {start_date} to {end_date}")
+
+    df = dolt.get_prices(ticker, start_date, end_date)
+
+    if df.empty:
+        print(f"\n✗ FAILED - No price data found in Dolt for {ticker}")
+        return False
+
+    print(f"✓ Fetched {len(df)} rows from Dolt")
+
+    # Partition by month and write to R2
+    df["year"] = df["date"].dt.year
+    df["month"] = df["date"].dt.month
+    groups = df.groupby(["year", "month"])
+    files_written = 0
+
+    for (year, month), group_df in groups:
+        data_df = group_df.drop(columns=["year", "month"])
+        key = r2.build_key(dataset="prices", ticker=ticker, year=year, month=month)
+        r2.merge_and_put(key, data_df, dedupe_column="date")
+        files_written += 1
+
+    print(f"\n✓ SUCCESS")
+    print(f"  Rows ingested: {len(df)}")
+    print(f"  Files written: {files_written}")
+    print(f"  Storage: R2 prices/v1/{ticker}/YYYY/MM/data.parquet")
+    return True
+
+
+def step_1_5_ingest_fundamentals_from_dolt(ticker: str, start_date: date, end_date: date, dolt: DoltClient):
+    """Step 1.5: Ingest fundamental data from Dolt."""
+    print("\n" + "=" * 70)
+    print("STEP 1.5: Ingest Fundamental Data (from Dolt)")
+    print("=" * 70)
+
+    r2 = R2Client()
+
+    print(f"Fetching {ticker} fundamental data from Dolt...")
+
+    df = dolt.get_fundamentals(ticker, start_date, end_date)
+
+    if df.empty:
+        print(f"\n⚠️  No fundamental data found in Dolt for {ticker}")
+        print(f"  Skipping - will continue with price data only")
+        return False
+
+    print(f"✓ Fetched {len(df)} rows from Dolt")
+
+    # Partition by year/month of period_end
+    df["year"] = df["period_end"].dt.year
+    df["month"] = df["period_end"].dt.month
+    groups = df.groupby(["year", "month"])
+    files_written = 0
+
+    for (year, month), group_df in groups:
+        data_df = group_df.drop(columns=["year", "month"])
+        key = r2.build_key(dataset="fundamentals", ticker=ticker, year=year, month=month)
+        r2.merge_and_put(key, data_df, dedupe_column="period_end")
+        files_written += 1
+
+    print(f"\n✓ SUCCESS")
+    print(f"  Rows ingested: {len(df)}")
+    print(f"  Files written: {files_written}")
+    print(f"  Storage: R2 fundamentals/v1/{ticker}/YYYY/MM/data.parquet")
+    return True
 
 
 def step_1_ingest_prices(ticker: str, start_date: date, end_date: date):
@@ -257,6 +432,29 @@ def main():
         default=date.today().isoformat(),
         help="End date (YYYY-MM-DD), default: today"
     )
+    parser.add_argument(
+        "--use-dolt",
+        action="store_true",
+        help="Use Dolt database instead of EODHD API (saves API requests)"
+    )
+    parser.add_argument(
+        "--dolt-host",
+        type=str,
+        default="localhost",
+        help="Dolt host (default: localhost)"
+    )
+    parser.add_argument(
+        "--stocks-port",
+        type=int,
+        default=3306,
+        help="Dolt stocks DB port (default: 3306)"
+    )
+    parser.add_argument(
+        "--earnings-port",
+        type=int,
+        default=3307,
+        help="Dolt earnings DB port (default: 3307)"
+    )
 
     args = parser.parse_args()
 
@@ -270,20 +468,46 @@ def main():
     print(f"\nTicker: {ticker}")
     print(f"Date Range: {start_date} to {end_date}")
     print(f"Duration: {(end_date - start_date).days} days")
+    print(f"Data Source: {'Dolt Database' if args.use_dolt else 'EODHD API'}")
 
     # Check configuration
     print("\n" + "=" * 70)
     print("Checking Configuration")
     print("=" * 70)
 
-    try:
-        from src.ingest.eodhd_client import EODHDClient
-        client = EODHDClient()
-        print("✓ EODHD API client configured")
-    except Exception as e:
-        print(f"✗ EODHD configuration error: {e}")
-        print("\nRequired: Set EODHD_API_KEY environment variable")
-        return 1
+    dolt_client = None
+
+    if args.use_dolt:
+        # Check Dolt availability
+        if not DOLT_AVAILABLE:
+            print("✗ mysql-connector-python not installed")
+            print("  Install with: pip install mysql-connector-python")
+            return 1
+
+        # Connect to Dolt
+        dolt_client = DoltClient(
+            host=args.dolt_host,
+            stocks_port=args.stocks_port,
+            earnings_port=args.earnings_port
+        )
+        if not dolt_client.connect():
+            print("\n✗ Failed to connect to Dolt databases")
+            print("\nTo start Dolt services:")
+            print("  docker-compose up -d dolt-stocks dolt-earnings")
+            print("  OR see docs/quick-start-uber-backfill.md")
+            return 1
+        print("✓ Dolt client configured")
+    else:
+        # Check EODHD
+        try:
+            from src.ingest.eodhd_client import EODHDClient
+            client = EODHDClient()
+            print("✓ EODHD API client configured")
+        except Exception as e:
+            print(f"✗ EODHD configuration error: {e}")
+            print("\nRequired: Set EODHD_API_KEY environment variable")
+            print("OR use --use-dolt flag to use local Dolt database")
+            return 1
 
     try:
         from src.storage.r2_client import R2Client
@@ -295,15 +519,27 @@ def main():
         return 1
 
     # Run pipeline
-    steps = [
-        ("Ingest Prices", lambda: step_1_ingest_prices(ticker, start_date, end_date)),
-        ("Verify Prices", lambda: step_2_verify_prices(ticker)),
-        ("Compute Technical", lambda: step_3_compute_technical_signals(ticker)),
-        ("Verify Technical", lambda: step_4_verify_technical_signals(ticker)),
-        ("Check Fundamentals", lambda: step_5_check_fundamentals(ticker)),
-        ("Compute Valuation", lambda: step_6_compute_valuation_signals(ticker)),
-        ("Test Valuation Regime", lambda: step_7_test_valuation_regime(ticker)),
-    ]
+    if args.use_dolt:
+        steps = [
+            ("Ingest Prices", lambda: step_1_ingest_prices_from_dolt(ticker, start_date, end_date, dolt_client)),
+            ("Ingest Fundamentals", lambda: step_1_5_ingest_fundamentals_from_dolt(ticker, start_date, end_date, dolt_client)),
+            ("Verify Prices", lambda: step_2_verify_prices(ticker)),
+            ("Compute Technical", lambda: step_3_compute_technical_signals(ticker)),
+            ("Verify Technical", lambda: step_4_verify_technical_signals(ticker)),
+            ("Check Fundamentals", lambda: step_5_check_fundamentals(ticker)),
+            ("Compute Valuation", lambda: step_6_compute_valuation_signals(ticker)),
+            ("Test Valuation Regime", lambda: step_7_test_valuation_regime(ticker)),
+        ]
+    else:
+        steps = [
+            ("Ingest Prices", lambda: step_1_ingest_prices(ticker, start_date, end_date)),
+            ("Verify Prices", lambda: step_2_verify_prices(ticker)),
+            ("Compute Technical", lambda: step_3_compute_technical_signals(ticker)),
+            ("Verify Technical", lambda: step_4_verify_technical_signals(ticker)),
+            ("Check Fundamentals", lambda: step_5_check_fundamentals(ticker)),
+            ("Compute Valuation", lambda: step_6_compute_valuation_signals(ticker)),
+            ("Test Valuation Regime", lambda: step_7_test_valuation_regime(ticker)),
+        ]
 
     results = []
     for step_name, step_func in steps:
@@ -315,6 +551,11 @@ def main():
             import traceback
             traceback.print_exc()
             results.append((step_name, False))
+
+    # Cleanup
+    if dolt_client:
+        dolt_client.disconnect()
+        print("\n✓ Disconnected from Dolt")
 
     # Summary
     print("\n" + "=" * 70)
