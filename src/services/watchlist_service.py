@@ -43,7 +43,7 @@ class WatchlistService:
         """
         self.db = db_client
 
-    async def get_watchlist(self, user_id: str) -> Dict[str, Any]:
+    def get_watchlist(self, user_id: str) -> Dict[str, Any]:
         """
         Get user's watchlist with latest computed states
 
@@ -97,7 +97,7 @@ class WatchlistService:
                 ORDER BY w.added_at DESC
             """
 
-            result = await self.db.rpc('exec_sql', {
+            result = self.db.rpc('exec_sql', {
                 'query': query,
                 'params': [user_id]
             }).execute()
@@ -124,7 +124,7 @@ class WatchlistService:
             logger.error(f"Error fetching watchlist for user {user_id}: {e}")
             raise
 
-    async def add_stock(self, user_id: str, ticker: str) -> Dict[str, Any]:
+    def add_stock(self, user_id: str, ticker: str) -> Dict[str, Any]:
         """
         Add stock to user's watchlist
 
@@ -148,11 +148,11 @@ class WatchlistService:
             ticker = ticker.upper()
 
             # 1. Get or create entity
-            entity = await self._get_or_create_entity(ticker)
+            entity = self._get_or_create_entity(ticker)
             entity_id = entity['id']
 
             # 2. Check if already in watchlist
-            existing = await self.db.from_('watchlists').select('id').eq(
+            existing = self.db.from_('watchlists').select('id').eq(
                 'user_id', user_id
             ).eq('entity_id', entity_id).execute()
 
@@ -160,21 +160,21 @@ class WatchlistService:
                 raise ValueError(f"Stock {ticker} is already in your watchlist")
 
             # 3. Add to watchlist
-            await self.db.from_('watchlists').insert({
+            self.db.from_('watchlists').insert({
                 'user_id': user_id,
                 'entity_id': entity_id,
                 'alerts_enabled': True
             }).execute()
 
             # 4. Initialize user_entity_settings (will be populated by pipeline)
-            await self.db.from_('user_entity_settings').insert({
+            self.db.from_('user_entity_settings').insert({
                 'user_id': user_id,
                 'entity_id': entity_id
             }).execute()
 
             # 5. Queue for backfill if entity doesn't have data
             if not entity.get('has_price_data') or not entity.get('has_fundamental_data'):
-                await self._queue_for_backfill(ticker, user_id)
+                self._queue_for_backfill(ticker, user_id)
 
             logger.info(f"Added {ticker} to watchlist for user {user_id}")
 
@@ -190,7 +190,7 @@ class WatchlistService:
             logger.error(f"Error adding {ticker} to watchlist for user {user_id}: {e}")
             raise
 
-    async def remove_stock(self, user_id: str, ticker: str) -> Dict[str, Any]:
+    def remove_stock(self, user_id: str, ticker: str) -> Dict[str, Any]:
         """
         Remove stock from user's watchlist
 
@@ -210,7 +210,7 @@ class WatchlistService:
             ticker = ticker.upper()
 
             # Get entity_id
-            entity = await self.db.from_('entities').select('id').eq(
+            entity = self.db.from_('entities').select('id').eq(
                 'ticker', ticker
             ).single().execute()
 
@@ -220,7 +220,7 @@ class WatchlistService:
             entity_id = entity.data['id']
 
             # Delete from watchlist
-            result = await self.db.from_('watchlists').delete().eq(
+            result = self.db.from_('watchlists').delete().eq(
                 'user_id', user_id
             ).eq('entity_id', entity_id).execute()
 
@@ -241,7 +241,7 @@ class WatchlistService:
             logger.error(f"Error removing {ticker} from watchlist for user {user_id}: {e}")
             raise
 
-    async def _get_or_create_entity(self, ticker: str) -> Dict[str, Any]:
+    def _get_or_create_entity(self, ticker: str) -> Dict[str, Any]:
         """
         Get entity by ticker, or create if doesn't exist
 
@@ -255,7 +255,7 @@ class WatchlistService:
             ValueError: If ticker is invalid
         """
         # Try to get existing entity
-        result = await self.db.from_('entities').select('*').eq(
+        result = self.db.from_('entities').select('*').eq(
             'ticker', ticker
         ).execute()
 
@@ -263,7 +263,7 @@ class WatchlistService:
             return result.data[0]
 
         # Create new entity (name will be filled by backfill process)
-        new_entity = await self.db.from_('entities').insert({
+        new_entity = self.db.from_('entities').insert({
             'ticker': ticker,
             'name': ticker,  # Placeholder, will be updated by backfill
             'has_price_data': False,
@@ -277,7 +277,7 @@ class WatchlistService:
 
         return new_entity.data[0]
 
-    async def _queue_for_backfill(self, ticker: str, user_id: str) -> None:
+    def _queue_for_backfill(self, ticker: str, user_id: str) -> None:
         """
         Add stock to backfill queue
 
@@ -287,7 +287,7 @@ class WatchlistService:
         """
         try:
             # Insert into queue (will auto-increment priority if already exists)
-            await self.db.from_('backfill_queue').insert({
+            self.db.from_('backfill_queue').insert({
                 'ticker': ticker,
                 'requested_by': user_id,
                 'status': 'pending',

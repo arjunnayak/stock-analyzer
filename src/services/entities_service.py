@@ -25,7 +25,7 @@ class EntitiesService:
         """
         self.db = db_client
 
-    async def search(self, query: str, limit: int = 10) -> Dict[str, Any]:
+    def search(self, query: str, limit: int = 10) -> Dict[str, Any]:
         """
         Search stocks by ticker or company name
 
@@ -54,7 +54,7 @@ class EntitiesService:
 
             # Search by ticker (starts with) OR name (contains)
             # Prioritize ticker matches
-            results = await self.db.from_('entities').select(
+            results = self.db.from_('entities').select(
                 'ticker, name, sector'
             ).or_(
                 f'ticker.ilike.{query}%,name.ilike.%{query}%'
@@ -78,7 +78,7 @@ class EntitiesService:
             logger.error(f"Error searching for '{query}': {e}")
             raise
 
-    async def get_stock(self, ticker: str) -> Dict[str, Any]:
+    def get_stock(self, ticker: str) -> Dict[str, Any]:
         """
         Get stock details by ticker
 
@@ -94,7 +94,7 @@ class EntitiesService:
         try:
             ticker = ticker.upper()
 
-            result = await self.db.from_('entities').select(
+            result = self.db.from_('entities').select(
                 'ticker, name, sector, has_price_data, has_fundamental_data, '
                 'price_data_min_date, price_data_max_date, '
                 'fundamental_data_min_date, fundamental_data_max_date, '
@@ -130,7 +130,7 @@ class EntitiesService:
             logger.error(f"Error fetching stock {ticker}: {e}")
             raise
 
-    async def get_popular_stocks(self, limit: int = 20) -> Dict[str, Any]:
+    def get_popular_stocks(self, limit: int = 20) -> Dict[str, Any]:
         """
         Get popular stocks (most watched)
 
@@ -159,7 +159,7 @@ class EntitiesService:
                 LIMIT $1
             """
 
-            result = await self.db.rpc('exec_sql', {
+            result = self.db.rpc('exec_sql', {
                 'query': query,
                 'params': [limit]
             }).execute()
@@ -181,7 +181,7 @@ class EntitiesService:
             logger.error(f"Error fetching popular stocks: {e}")
             raise
 
-    async def check_stock_exists(self, ticker: str) -> bool:
+    def check_stock_exists(self, ticker: str) -> bool:
         """
         Check if stock exists in database
 
@@ -194,7 +194,7 @@ class EntitiesService:
         try:
             ticker = ticker.upper()
 
-            result = await self.db.from_('entities').select(
+            result = self.db.from_('entities').select(
                 'id'
             ).eq('ticker', ticker).execute()
 

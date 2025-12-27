@@ -46,7 +46,7 @@ def error_response(message, status=400):
     }, status=status)
 
 
-async def handle_request(request):
+def handle_request(request):
     """
     Main request handler
 
@@ -65,18 +65,18 @@ async def handle_request(request):
         parts = path.strip('/').split('/')
 
         # Initialize database client
-        db = await get_supabase_client()
+        db = get_supabase_client()
 
         # Route to appropriate handler
         if parts[0] == 'api':
             if parts[1] == 'user':
-                return await handle_user(request, parts[2:], db)
+                return handle_user(request, parts[2:], db)
             elif parts[1] == 'watchlist':
-                return await handle_watchlist(request, parts[2:], db)
+                return handle_watchlist(request, parts[2:], db)
             elif parts[1] == 'entities':
-                return await handle_entities(request, parts[2:], db)
+                return handle_entities(request, parts[2:], db)
             elif parts[1] == 'alerts':
-                return await handle_alerts(request, parts[2:], db)
+                return handle_alerts(request, parts[2:], db)
             elif parts[1] == 'health':
                 return json_response({'status': 'ok', 'service': 'material-changes-api'})
 
@@ -94,7 +94,7 @@ async def handle_request(request):
 # USER ROUTES
 # ============================================================================
 
-async def handle_user(request, parts, db):
+def handle_user(request, parts, db):
     """
     Handle /api/user/* routes
 
@@ -112,7 +112,7 @@ async def handle_user(request, parts, db):
     # POST /api/user/:userId/onboarding
     if len(parts) >= 2 and parts[1] == 'onboarding' and method == 'POST':
         data = await request.json()
-        result = await service.complete_onboarding(
+        result = service.complete_onboarding(
             user_id,
             investing_style=data.get('investing_style'),
             tickers=data.get('tickers', [])
@@ -121,13 +121,13 @@ async def handle_user(request, parts, db):
 
     # GET /api/user/:userId/settings
     elif len(parts) >= 2 and parts[1] == 'settings' and method == 'GET':
-        result = await service.get_settings(user_id)
+        result = service.get_settings(user_id)
         return json_response(result)
 
     # PATCH /api/user/:userId/settings
     elif len(parts) >= 2 and parts[1] == 'settings' and method == 'PATCH':
         data = await request.json()
-        result = await service.update_settings(user_id, data)
+        result = service.update_settings(user_id, data)
         return json_response(result)
 
     return error_response('Endpoint not found', 404)
@@ -137,7 +137,7 @@ async def handle_user(request, parts, db):
 # WATCHLIST ROUTES
 # ============================================================================
 
-async def handle_watchlist(request, parts, db):
+def handle_watchlist(request, parts, db):
     """
     Handle /api/watchlist/* routes
 
@@ -154,7 +154,7 @@ async def handle_watchlist(request, parts, db):
 
     # GET /api/watchlist/:userId
     if len(parts) == 1 and method == 'GET':
-        result = await service.get_watchlist(user_id)
+        result = service.get_watchlist(user_id)
         return json_response(result)
 
     # POST /api/watchlist/:userId
@@ -164,13 +164,13 @@ async def handle_watchlist(request, parts, db):
         if not ticker:
             return error_response('Ticker required', 400)
 
-        result = await service.add_stock(user_id, ticker)
+        result = service.add_stock(user_id, ticker)
         return json_response(result)
 
     # DELETE /api/watchlist/:userId/:ticker
     elif len(parts) == 2 and method == 'DELETE':
         ticker = parts[1]
-        result = await service.remove_stock(user_id, ticker)
+        result = service.remove_stock(user_id, ticker)
         return json_response(result)
 
     return error_response('Endpoint not found', 404)
@@ -180,7 +180,7 @@ async def handle_watchlist(request, parts, db):
 # ENTITIES ROUTES
 # ============================================================================
 
-async def handle_entities(request, parts, db):
+def handle_entities(request, parts, db):
     """
     Handle /api/entities/* routes
 
@@ -200,7 +200,7 @@ async def handle_entities(request, parts, db):
         query = url.searchParams.get('q', '')
         limit = int(url.searchParams.get('limit', '10'))
 
-        result = await service.search(query, limit)
+        result = service.search(query, limit)
         return json_response(result)
 
     # GET /api/entities/popular
@@ -208,13 +208,13 @@ async def handle_entities(request, parts, db):
         url = request.url
         limit = int(url.searchParams.get('limit', '20'))
 
-        result = await service.get_popular_stocks(limit)
+        result = service.get_popular_stocks(limit)
         return json_response(result)
 
     # GET /api/entities/:ticker
     else:
         ticker = parts[0]
-        result = await service.get_stock(ticker)
+        result = service.get_stock(ticker)
         return json_response(result)
 
 
@@ -222,7 +222,7 @@ async def handle_entities(request, parts, db):
 # ALERTS ROUTES
 # ============================================================================
 
-async def handle_alerts(request, parts, db):
+def handle_alerts(request, parts, db):
     """
     Handle /api/alerts/* routes
 
@@ -239,13 +239,13 @@ async def handle_alerts(request, parts, db):
     # POST /api/alerts/:alertId/opened
     if len(parts) == 2 and parts[1] == 'opened' and method == 'POST':
         alert_id = parts[0]
-        result = await service.mark_opened(alert_id)
+        result = service.mark_opened(alert_id)
         return json_response(result)
 
     # GET /api/alerts/:userId/stats
     elif len(parts) == 2 and parts[1] == 'stats' and method == 'GET':
         user_id = parts[0]
-        result = await service.get_alert_stats(user_id)
+        result = service.get_alert_stats(user_id)
         return json_response(result)
 
     # GET /api/alerts/:userId
@@ -256,7 +256,7 @@ async def handle_alerts(request, parts, db):
         offset = int(url.searchParams.get('offset', '0'))
         alert_type = url.searchParams.get('type')
 
-        result = await service.get_alerts(user_id, limit, offset, alert_type)
+        result = service.get_alerts(user_id, limit, offset, alert_type)
         return json_response(result)
 
     return error_response('Endpoint not found', 404)
@@ -266,6 +266,6 @@ async def handle_alerts(request, parts, db):
 # Worker Entry Point
 # ============================================================================
 
-async def on_fetch(request):
+def on_fetch(request):
     """Cloudflare Worker fetch event handler"""
-    return await handle_request(request)
+    return handle_request(request)

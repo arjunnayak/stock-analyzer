@@ -26,7 +26,7 @@ class UserService:
         """
         self.db = db_client
 
-    async def complete_onboarding(
+    def complete_onboarding(
         self,
         user_id: str,
         investing_style: Optional[str] = None,
@@ -52,7 +52,7 @@ class UserService:
         try:
             # Update user settings
             if investing_style:
-                await self.update_settings(user_id, {
+                self.update_settings(user_id, {
                     'investing_style': investing_style
                 })
 
@@ -75,7 +75,7 @@ class UserService:
             logger.error(f"Error completing onboarding for user {user_id}: {e}")
             raise
 
-    async def get_settings(self, user_id: str) -> Dict[str, Any]:
+    def get_settings(self, user_id: str) -> Dict[str, Any]:
         """
         Get user settings
 
@@ -90,7 +90,7 @@ class UserService:
         """
         try:
             # Query user from database
-            result = await self.db.from_('users').select(
+            result = self.db.from_('users').select(
                 'investing_style, alerts_enabled'
             ).eq('id', user_id).single().execute()
 
@@ -106,7 +106,7 @@ class UserService:
             logger.error(f"Error fetching settings for user {user_id}: {e}")
             raise
 
-    async def update_settings(
+    def update_settings(
         self,
         user_id: str,
         settings: Dict[str, Any]
@@ -139,7 +139,7 @@ class UserService:
                     raise ValueError(f"Invalid investing_style: {style}")
 
             # Update database
-            result = await self.db.from_('users').update(
+            result = self.db.from_('users').update(
                 update_data
             ).eq('id', user_id).execute()
 
@@ -148,13 +148,13 @@ class UserService:
 
             logger.info(f"Updated settings for user {user_id}: {update_data}")
 
-            return await self.get_settings(user_id)
+            return self.get_settings(user_id)
 
         except Exception as e:
             logger.error(f"Error updating settings for user {user_id}: {e}")
             raise
 
-    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
         Get user by ID
 
@@ -165,7 +165,7 @@ class UserService:
             dict: User data or None if not found
         """
         try:
-            result = await self.db.from_('users').select(
+            result = self.db.from_('users').select(
                 'id, email, investing_style, alerts_enabled, created_at'
             ).eq('id', user_id).single().execute()
 

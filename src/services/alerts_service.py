@@ -26,7 +26,7 @@ class AlertsService:
         """
         self.db = db_client
 
-    async def get_alerts(
+    def get_alerts(
         self,
         user_id: str,
         limit: int = 20,
@@ -81,10 +81,10 @@ class AlertsService:
             query = query.range(offset, offset + limit - 1)
 
             # Execute query
-            result = await query.execute()
+            result = query.execute()
 
             # Get total count
-            count_result = await self.db.from_('alert_history').select(
+            count_result = self.db.from_('alert_history').select(
                 'id', count='exact'
             ).eq('user_id', user_id).execute()
 
@@ -119,7 +119,7 @@ class AlertsService:
             logger.error(f"Error fetching alerts for user {user_id}: {e}")
             raise
 
-    async def mark_opened(self, alert_id: str) -> Dict[str, Any]:
+    def mark_opened(self, alert_id: str) -> Dict[str, Any]:
         """
         Mark alert as opened
 
@@ -136,14 +136,14 @@ class AlertsService:
         """
         try:
             # Update opened_at timestamp if not already set
-            result = await self.db.from_('alert_history').update({
+            result = self.db.from_('alert_history').update({
                 'opened_at': datetime.utcnow().isoformat()
             }).eq('id', alert_id).is_('opened_at', None).execute()
 
             if not result.data:
                 # Either alert not found or already marked as opened
                 # Check if alert exists
-                check = await self.db.from_('alert_history').select(
+                check = self.db.from_('alert_history').select(
                     'id, opened_at'
                 ).eq('id', alert_id).execute()
 
@@ -166,7 +166,7 @@ class AlertsService:
             logger.error(f"Error marking alert {alert_id} as opened: {e}")
             raise
 
-    async def get_alert_stats(self, user_id: str) -> Dict[str, Any]:
+    def get_alert_stats(self, user_id: str) -> Dict[str, Any]:
         """
         Get alert statistics for user
 
@@ -190,7 +190,7 @@ class AlertsService:
                 GROUP BY alert_type
             """
 
-            result = await self.db.rpc('exec_sql', {
+            result = self.db.rpc('exec_sql', {
                 'query': query,
                 'params': [user_id]
             }).execute()
@@ -226,7 +226,7 @@ class AlertsService:
             logger.error(f"Error fetching alert stats for user {user_id}: {e}")
             raise
 
-    async def get_recent_alerts_count(
+    def get_recent_alerts_count(
         self,
         user_id: str,
         days: int = 7
@@ -246,7 +246,7 @@ class AlertsService:
 
             cutoff_date = datetime.utcnow() - timedelta(days=days)
 
-            result = await self.db.from_('alert_history').select(
+            result = self.db.from_('alert_history').select(
                 'id', count='exact'
             ).eq('user_id', user_id).gte(
                 'sent_at', cutoff_date.isoformat()
