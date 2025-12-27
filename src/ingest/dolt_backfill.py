@@ -8,6 +8,7 @@ Uses:
 - post-no-preference/earnings (for fundamentals)
 """
 
+import os
 import logging
 import requests
 import pandas as pd
@@ -38,7 +39,7 @@ class DoltBackfiller:
         self.db = db_client
         self.r2 = r2_client
 
-    async def backfill_ticker(self, ticker: str) -> None:
+    def backfill_ticker(self, ticker: str) -> None:
         """
         Backfill all historical data for a ticker
 
@@ -51,31 +52,31 @@ class DoltBackfiller:
         logger.info(f"Starting backfill for {ticker}")
 
         # 1. Fetch price data from DoltHub
-        prices_df = await self._fetch_prices_from_dolt(ticker)
+        prices_df = self._fetch_prices_from_dolt(ticker)
 
         if prices_df is not None and not prices_df.empty:
             # Upload to R2
-            await self._upload_prices_to_r2(ticker, prices_df)
+            self._upload_prices_to_r2(ticker, prices_df)
             logger.info(f"Uploaded {len(prices_df)} price records for {ticker}")
         else:
             logger.warning(f"No price data found for {ticker}")
 
         # 2. Fetch fundamental data from DoltHub
-        fundamentals_df = await self._fetch_fundamentals_from_dolt(ticker)
+        fundamentals_df = self._fetch_fundamentals_from_dolt(ticker)
 
         if fundamentals_df is not None and not fundamentals_df.empty:
             # Upload to R2
-            await self._upload_fundamentals_to_r2(ticker, fundamentals_df)
+            self._upload_fundamentals_to_r2(ticker, fundamentals_df)
             logger.info(f"Uploaded {len(fundamentals_df)} fundamental records for {ticker}")
         else:
             logger.warning(f"No fundamental data found for {ticker}")
 
         # 3. Update entity metadata
-        await self._update_entity_metadata(ticker, prices_df, fundamentals_df)
+        self._update_entity_metadata(ticker, prices_df, fundamentals_df)
 
         logger.info(f"Completed backfill for {ticker}")
 
-    async def _fetch_prices_from_dolt(self, ticker: str) -> Optional[pd.DataFrame]:
+    def _fetch_prices_from_dolt(self, ticker: str) -> Optional[pd.DataFrame]:
         """
         Fetch price data from DoltHub stocks database
 
@@ -120,7 +121,7 @@ class DoltBackfiller:
             logger.error(f"Error fetching prices from DoltHub for {ticker}: {e}")
             return None
 
-    async def _fetch_fundamentals_from_dolt(self, ticker: str) -> Optional[pd.DataFrame]:
+    def _fetch_fundamentals_from_dolt(self, ticker: str) -> Optional[pd.DataFrame]:
         """
         Fetch fundamental data from DoltHub earnings database
 
@@ -165,7 +166,7 @@ class DoltBackfiller:
             logger.error(f"Error fetching fundamentals from DoltHub for {ticker}: {e}")
             return None
 
-    async def _upload_prices_to_r2(self, ticker: str, df: pd.DataFrame) -> None:
+    def _upload_prices_to_r2(self, ticker: str, df: pd.DataFrame) -> None:
         """Upload price data to R2 in monthly partitions"""
         # Group by year/month and upload each partition
         df['year'] = df['date'].dt.year
@@ -187,7 +188,7 @@ class DoltBackfiller:
 
             logger.debug(f"Uploaded {key}")
 
-    async def _upload_fundamentals_to_r2(self, ticker: str, df: pd.DataFrame) -> None:
+    def _upload_fundamentals_to_r2(self, ticker: str, df: pd.DataFrame) -> None:
         """Upload fundamental data to R2 in monthly partitions"""
         # Group by year/month and upload each partition
         df['year'] = df['date'].dt.year
@@ -209,7 +210,7 @@ class DoltBackfiller:
 
             logger.debug(f"Uploaded {key}")
 
-    async def _update_entity_metadata(
+    def _update_entity_metadata(
         self,
         ticker: str,
         prices_df: Optional[pd.DataFrame],
@@ -231,7 +232,7 @@ class DoltBackfiller:
         if update_data:
             update_data['last_data_update'] = datetime.utcnow().isoformat()
 
-            await self.db.from_('entities').update(
+            self.db.table('entities').update(
                 update_data
             ).eq('ticker', ticker).execute()
 

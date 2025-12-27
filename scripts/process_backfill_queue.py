@@ -48,7 +48,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def process_backfill_queue():
+def process_backfill_queue():
     """
     Main function to process backfill queue
 
@@ -58,19 +58,11 @@ async def process_backfill_queue():
     logger.info("Starting backfill queue processing")
 
     # Initialize clients
-    db = await get_supabase_client()
-    r2 = await get_r2_client()
+    db = get_supabase_client()
+    r2 = get_r2_client()
 
     # Get pending backfill items (ordered by priority DESC, oldest first)
-    query = """
-        SELECT id, ticker, requested_by, priority
-        FROM backfill_queue
-        WHERE status = 'pending'
-        ORDER BY priority DESC, requested_at ASC
-        LIMIT 50
-    """
-
-    result = await db.rpc('exec_sql', {'query': query, 'params': []}).execute()
+    result = db.table('backfill_queue').select('id, ticker, requested_by, priority').eq('status', 'pending').order('priority', desc=True).order('requested_at').limit(50).execute()
     pending_items = result.data or []
 
     logger.info(f"Found {len(pending_items)} stocks in backfill queue")
@@ -98,16 +90,16 @@ async def process_backfill_queue():
 
         try:
             # Mark as processing
-            await db.from_('backfill_queue').update({
+            db.table('backfill_queue').update({
                 'status': 'processing',
                 'started_at': datetime.utcnow().isoformat()
             }).eq('id', queue_id).execute()
 
             # Backfill data from DoltHub
-            await backfiller.backfill_ticker(ticker)
+            backfiller.backfill_ticker(ticker)
 
             # Mark as completed
-            await db.from_('backfill_queue').update({
+            db.table('backfill_queue').update({
                 'status': 'completed',
                 'completed_at': datetime.utcnow().isoformat()
             }).eq('id', queue_id).execute()
@@ -119,7 +111,7 @@ async def process_backfill_queue():
             logger.error(f"✗ Failed to backfill {ticker}: {e}")
 
             # Mark as failed and increment retry count
-            await db.from_('backfill_queue').update({
+            db.table('backfill_queue').update({
                 'status': 'failed',
                 'error_message': str(e)[:500],  # Limit error message length
                 'retry_count': item.get('retry_count', 0) + 1
@@ -140,5 +132,4 @@ async def process_backfill_queue():
 
 
 if __name__ == '__main__':
-    import asyncio
-    asyncio.run(process_backfill_queue())
+    process_backfill_queue()
