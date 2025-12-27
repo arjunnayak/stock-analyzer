@@ -328,27 +328,32 @@ class ValuationSignals:
 
         Args:
             fundamentals_df: DataFrame with quarterly fundamental data
-                            Expected columns: date, sales, period
+                            Expected columns: period_end, revenue, period
 
         Returns:
             DataFrame with columns: date, ttm_revenue
         """
-        if fundamentals_df.empty or 'sales' not in fundamentals_df.columns:
+        if fundamentals_df.empty or 'revenue' not in fundamentals_df.columns:
             return pd.DataFrame(columns=['date', 'ttm_revenue'])
 
         # Sort by date
         df = fundamentals_df.copy()
+
+        # Normalize column names (period_end -> date for consistency)
+        if 'period_end' in df.columns:
+            df = df.rename(columns={'period_end': 'date'})
+
         df = df.sort_values('date')
 
-        # Only use quarterly data (period = 'Q')
+        # Only use quarterly data (period = 'Quarter')
         if 'period' in df.columns:
-            df = df[df['period'].str.contains('Q', na=False)]
+            df = df[df['period'].str.contains('Quarter', na=False)]
 
         if len(df) < 4:
             return pd.DataFrame(columns=['date', 'ttm_revenue'])
 
         # Compute rolling 4-quarter sum
-        df['ttm_revenue'] = df['sales'].rolling(window=4, min_periods=4).sum()
+        df['ttm_revenue'] = df['revenue'].rolling(window=4, min_periods=4).sum()
 
         return df[['date', 'ttm_revenue']].copy()
 
@@ -362,6 +367,7 @@ class ValuationSignals:
 
         Args:
             fundamentals_df: DataFrame with quarterly fundamental data
+                            Expected columns: period_end, period, net_income, etc.
 
         Returns:
             DataFrame with columns: date, ttm_ebitda
@@ -370,11 +376,16 @@ class ValuationSignals:
             return pd.DataFrame(columns=['date', 'ttm_ebitda'])
 
         df = fundamentals_df.copy()
+
+        # Normalize column names (period_end -> date for consistency)
+        if 'period_end' in df.columns:
+            df = df.rename(columns={'period_end': 'date'})
+
         df = df.sort_values('date')
 
-        # Only use quarterly data
+        # Only use quarterly data (period = 'Quarter')
         if 'period' in df.columns:
-            df = df[df['period'].str.contains('Q', na=False)]
+            df = df[df['period'].str.contains('Quarter', na=False)]
 
         if len(df) < 4:
             return pd.DataFrame(columns=['date', 'ttm_ebitda'])
@@ -386,11 +397,14 @@ class ValuationSignals:
             # Fallback: compute from components
             # EBITDA = Net Income + Interest + Taxes + D&A
             df['ebitda_quarterly'] = (
-                df.get('net_income', 0) +
-                df.get('interest_expense', 0).fillna(0) +
-                df.get('income_taxes', 0).fillna(0) +
-                df.get('depreciation_and_amortization', 0).fillna(0)
+                df['net_income'].fillna(0) if 'net_income' in df.columns else 0
             )
+            if 'interest_expense' in df.columns:
+                df['ebitda_quarterly'] = df['ebitda_quarterly'] + df['interest_expense'].fillna(0)
+            if 'income_taxes' in df.columns:
+                df['ebitda_quarterly'] = df['ebitda_quarterly'] + df['income_taxes'].fillna(0)
+            if 'depreciation_and_amortization' in df.columns:
+                df['ebitda_quarterly'] = df['ebitda_quarterly'] + df['depreciation_and_amortization'].fillna(0)
 
         # Compute rolling 4-quarter sum
         df['ttm_ebitda'] = df['ebitda_quarterly'].rolling(window=4, min_periods=4).sum()
@@ -411,6 +425,7 @@ class ValuationSignals:
         Args:
             prices_df: DataFrame with daily price data (date, close)
             fundamentals_df: DataFrame with quarterly fundamental data
+                            Expected columns: period_end, average_shares, etc.
 
         Returns:
             DataFrame with columns: date, enterprise_value, market_cap, shares_outstanding
@@ -418,21 +433,30 @@ class ValuationSignals:
         if prices_df.empty or fundamentals_df.empty:
             return pd.DataFrame(columns=['date', 'enterprise_value', 'market_cap', 'shares_outstanding'])
 
+        # Normalize fundamental data column names
+        fund_df = fundamentals_df.copy()
+        if 'period_end' in fund_df.columns:
+            fund_df = fund_df.rename(columns={'period_end': 'date'})
+
+        # Map average_shares to shares_outstanding if needed
+        if 'shares_outstanding' not in fund_df.columns and 'average_shares' in fund_df.columns:
+            fund_df = fund_df.rename(columns={'average_shares': 'shares_outstanding'})
+
         # Get shares outstanding from balance sheet equity
-        if 'shares_outstanding' not in fundamentals_df.columns:
+        if 'shares_outstanding' not in fund_df.columns:
             return pd.DataFrame(columns=['date', 'enterprise_value', 'market_cap', 'shares_outstanding'])
 
         # Forward-fill quarterly data to daily frequency
         # This assumes balance sheet metrics persist until next report
-        quarterly_data = fundamentals_df[['date', 'shares_outstanding']].copy()
+        quarterly_data = fund_df[['date', 'shares_outstanding']].copy()
         quarterly_data = quarterly_data.sort_values('date').drop_duplicates('date')
 
         # Get total debt (current + long-term debt)
         total_debt = pd.Series(0, index=quarterly_data.index)
-        if 'long_term_debt' in fundamentals_df.columns:
-            debt_df = fundamentals_df[['date', 'long_term_debt']].copy()
-            if 'current_portion_long_term_debt' in fundamentals_df.columns:
-                debt_df = fundamentals_df[['date', 'long_term_debt', 'current_portion_long_term_debt']].copy()
+        if 'long_term_debt' in fund_df.columns:
+            debt_df = fund_df[['date', 'long_term_debt']].copy()
+            if 'current_portion_long_term_debt' in fund_df.columns:
+                debt_df = fund_df[['date', 'long_term_debt', 'current_portion_long_term_debt']].copy()
                 debt_df['total_debt'] = (
                     debt_df['long_term_debt'].fillna(0) +
                     debt_df['current_portion_long_term_debt'].fillna(0)
@@ -447,8 +471,8 @@ class ValuationSignals:
             quarterly_data['total_debt'] = 0
 
         # Get cash
-        if 'cash_and_equivalents' in fundamentals_df.columns:
-            cash_df = fundamentals_df[['date', 'cash_and_equivalents']].copy()
+        if 'cash_and_equivalents' in fund_df.columns:
+            cash_df = fund_df[['date', 'cash_and_equivalents']].copy()
             quarterly_data = quarterly_data.merge(
                 cash_df, on='date', how='left'
             )
