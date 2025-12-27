@@ -23,29 +23,29 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+        run: uv sync
 
       - name: Run unit tests
         run: |
           echo "Running valuation regime tests..."
-          python tests/test_valuation_regime.py
+          uv run python tests/test_valuation_regime.py
 
       - name: Lint with ruff (if configured)
         continue-on-error: true
         run: |
-          pip install ruff
-          ruff check src/ --fix
+          uv tool install ruff
+          uv tool run ruff check src/ --fix
 
       - name: Type check with mypy (if configured)
         continue-on-error: true
         run: |
-          pip install mypy
-          mypy src/ --ignore-missing-imports
+          uv tool install mypy
+          uv tool run mypy src/ --ignore-missing-imports
 
   validate-data-availability:
     name: Validate Data Pipeline
@@ -60,12 +60,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+        run: uv sync
 
       - name: Check data availability
         env:
@@ -78,4 +78,4 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: |
           echo "Checking R2 storage availability..."
-          python -c "from src.reader import TimeSeriesReader; r = TimeSeriesReader(); tickers = r.list_available_tickers(); print(f'Available tickers: {len(tickers)}')"
+          uv run python -c "from src.reader import TimeSeriesReader; r = TimeSeriesReader(); tickers = r.list_available_tickers(); print(f'Available tickers: {len(tickers)}')"

@@ -2,42 +2,75 @@
 
 This directory contains automated workflows for the stock analyzer MVP.
 
-## Workflows
+## Workflow Overview
 
-### 1. Daily Signal Evaluation (`daily-evaluation.yml`)
+**3 Simple Workflows:**
 
-**Purpose:** Run the daily batch job to evaluate signals and send alerts
-
-**Schedule:** Daily at 6 PM ET (11 PM UTC)
-
-**What it does:**
-- Evaluates all active watchlists
-- Detects material changes (valuation regime, trend breaks)
-- Generates and sends email alerts
-- Logs results for validation metrics
-
-**Manual trigger:**
-```bash
-# Trigger via GitHub UI or CLI
-gh workflow run daily-evaluation.yml
-```
-
-**Required secrets:**
-- `SUPABASE_URL` - Supabase API URL (e.g., https://xxx.supabase.co)
-- `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key (full access for backend/CI)
-- `R2_ACCESS_KEY_ID` - Cloudflare R2 access key
-- `R2_SECRET_ACCESS_KEY` - Cloudflare R2 secret
-- `R2_ENDPOINT_URL` - R2 endpoint
-- `R2_BUCKET_NAME` - R2 bucket name
-- `EODHD_API_KEY` - EODHD data provider API key
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` - Email delivery
-- `ALERT_EMAIL` - Email to notify on failures
+1. **Daily Pipeline** - End-of-day data ingestion, metrics computation, and alert evaluation
+2. **CI/CD** - Testing and validation on code changes
+3. **Backfill** - Manual/adhoc historical data backfills
 
 ---
 
-### 2. CI/CD (`ci.yml`)
+## 1. Daily Pipeline (`daily-pipeline.yml`)
 
-**Purpose:** Run tests and validation on PRs and pushes
+**Purpose:** Complete end-of-day workflow that keeps data fresh and sends alerts
+
+**Schedule:** Daily at 11 PM UTC (6 PM ET) - after market close + data availability
+
+**What it does (in sequence):**
+
+1. **Ingest Prices** (5-10 min)
+   - Fetches all tickers from active watchlists
+   - Retrieves latest 7 days of price data from EODHD API
+   - Merges with existing data in R2 (deduplicates by date)
+
+2. **Compute Metrics** (5-15 min)
+   - Computes valuation metrics (EV/Revenue, EV/EBITDA) for watchlist tickers
+   - Incremental update - only computes missing dates
+   - Writes to R2 storage
+
+3. **Evaluate & Alert** (2-5 min)
+   - Evaluates all active watchlists
+   - Detects material changes (valuation regime, trend breaks)
+   - Generates and sends email alerts
+   - Logs results for validation metrics
+
+**Total runtime:** ~15-30 minutes
+
+**Manual trigger:**
+```bash
+# Run full pipeline for all watchlist tickers
+gh workflow run daily-pipeline.yml
+
+# Run for specific tickers only
+gh workflow run daily-pipeline.yml -f tickers="AAPL MSFT GOOGL"
+
+# Skip price ingestion (use existing data)
+gh workflow run daily-pipeline.yml -f skip_ingestion=true
+
+# Skip metrics computation
+gh workflow run daily-pipeline.yml -f skip_metrics=true
+```
+
+**Required secrets:**
+- `SUPABASE_URL` - Supabase API URL
+- `SUPABASE_SERVICE_ROLE_KEY` - Service role key (full access)
+- `R2_ACCESS_KEY_ID` - Cloudflare R2 access key
+- `R2_SECRET_ACCESS_KEY` - Cloudflare R2 secret
+- `R2_ENDPOINT_URL` - R2 endpoint URL
+- `R2_BUCKET_NAME` - R2 bucket name
+- `EODHD_API_KEY` - EODHD data provider API key
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` - Email delivery
+- `ALERT_EMAIL` - Email for failure notifications
+
+**Why it's important:** This single workflow ensures fresh data → accurate metrics → timely alerts, all in one atomic operation.
+
+---
+
+## 2. CI/CD (`ci.yml`)
+
+**Purpose:** Run tests and validation on code changes
 
 **Triggers:**
 - Push to `main` or `claude/**` branches
@@ -47,38 +80,17 @@ gh workflow run daily-evaluation.yml
 - Runs unit tests (`test_valuation_regime.py`)
 - Lints code with ruff
 - Type checks with mypy
-- Validates data pipeline connectivity
+- Validates data pipeline connectivity (on PRs only)
 
 **No secrets required for basic tests**
 
----
-
-### 3. Compute Valuation Metrics (`compute-metrics.yml`)
-
-**Purpose:** Weekly batch job to backfill/update valuation metrics in R2
-
-**Schedule:** Weekly on Sundays at 2 AM UTC
-
-**What it does:**
-- Computes EV/Revenue and EV/EBITDA for all active tickers
-- Calculates TTM revenue and EBITDA from quarterly data
-- Writes results to R2 storage
-- Handles incremental updates (only recomputes missing dates)
-
-**Manual trigger with options:**
-```bash
-gh workflow run compute-metrics.yml \
-  -f tickers="AAPL,MSFT,GOOGL" \
-  -f force=true
-```
-
-**Required secrets:** Same as daily evaluation
+**Uses:** `uv` for fast dependency installation
 
 ---
 
-### 4. Data Backfill (`backfill.yml`)
+## 3. Backfill (`backfill.yml`)
 
-**Purpose:** One-time or catch-up data backfill
+**Purpose:** Manual/adhoc historical data backfills
 
 **Triggers:** Manual only
 
@@ -96,10 +108,6 @@ gh workflow run backfill.yml \
   -f tickers=AAPL \
   -f start_date=2020-01-01
 
-# Backfill valuation metrics for all active tickers
-gh workflow run backfill.yml \
-  -f dataset=valuation
-
 # Backfill fundamentals for specific date range
 gh workflow run backfill.yml \
   -f dataset=fundamentals \
@@ -107,7 +115,7 @@ gh workflow run backfill.yml \
   -f end_date=2024-01-01
 ```
 
-**Required secrets:** Same as daily evaluation
+**Required secrets:** Same as daily pipeline
 
 ---
 
@@ -117,21 +125,7 @@ Navigate to your GitHub repository settings:
 
 **Settings → Secrets and variables → Actions → New repository secret**
 
-Add all required secrets listed above.
-
-### Development/Testing Secrets
-
-For testing workflows without production data:
-
-```bash
-# Local testing (create .env.github file)
-DATABASE_URL=postgresql://user:pass@localhost:5432/stocks
-R2_ENDPOINT_URL=https://your-account.r2.cloudflarestorage.com
-R2_BUCKET_NAME=stock-analyzer-dev
-R2_ACCESS_KEY_ID=your_key
-R2_SECRET_ACCESS_KEY=your_secret
-EODHD_API_KEY=your_api_key
-```
+Add all secrets listed in the Daily Pipeline section above (9 total).
 
 ---
 
@@ -148,18 +142,20 @@ gh run view <run-id>
 
 # Download logs
 gh run download <run-id>
+
+# Watch a workflow in real-time
+gh run watch
 ```
 
 ### Artifacts
 
 All workflows upload logs as artifacts:
-- **Daily evaluation logs**: Retained for 7 days
-- **Metrics computation logs**: Retained for 14 days
+- **Daily pipeline logs**: Retained for 7 days
 - **Backfill logs**: Retained for 30 days
 
 ### Notifications
 
-The daily evaluation workflow sends email alerts on failure to `ALERT_EMAIL`.
+The daily pipeline sends email alerts on failure to `ALERT_EMAIL`.
 
 ---
 
@@ -172,51 +168,78 @@ The daily evaluation workflow sends email alerts on failure to `ALERT_EMAIL`.
 
 ### Our Usage (estimated):
 
-- **Daily evaluation**: ~5 min/day = 150 min/month
-- **Weekly metrics**: ~15 min/week = 60 min/month
+- **Daily pipeline**: ~20 min/day = 600 min/month
 - **CI/CD**: ~3 min/run × 20 runs = 60 min/month
-- **Total**: ~270 min/month (well within free tier)
+- **Total**: ~660 min/month (well within free tier)
 
 ### Tips:
 
 1. Use `timeout-minutes` to prevent runaway jobs
-2. Cache Python dependencies with `cache: 'pip'`
-3. Run expensive jobs weekly, not daily
-4. Use `workflow_dispatch` for manual/testing workflows
+2. `uv` provides fast dependency installation (no caching needed)
+3. Daily pipeline is incremental - only processes new data
+4. Use `workflow_dispatch` for manual testing without affecting quotas
 
 ---
 
 ## Troubleshooting
 
-### Workflow fails with "Module not found"
+### Daily pipeline fails at ingestion step
 
-Check that dependencies are installed:
-```yaml
-- name: Install dependencies
-  run: |
-    python -m pip install --upgrade pip
-    pip install -e .
-```
+**Symptoms:** Price ingestion fails with API errors
+
+**Solutions:**
+- Check EODHD API key is valid
+- Verify API rate limits not exceeded
+- Test locally: `uv run python scripts/ingest_prices.py --tickers AAPL`
+
+### Daily pipeline fails at metrics step
+
+**Symptoms:** Valuation computation fails for some tickers
+
+**Solutions:**
+- Check if fundamental data exists in R2
+- Run backfill for fundamentals: `gh workflow run backfill.yml -f dataset=fundamentals`
+- Test locally: `uv run python scripts/compute_metrics.py --ticker AAPL --valuation-only`
+
+### Daily pipeline fails at evaluation step
+
+**Symptoms:** Signal evaluation or alert sending fails
+
+**Solutions:**
+- Check Supabase connection (watchlist data)
+- Verify SMTP credentials for email delivery
+- Test locally: `uv run python -m src.signals.pipeline`
 
 ### Secrets not available
 
 Verify secrets are set in repository settings and named exactly as in workflow files.
 
-### Timeout issues
-
-Increase `timeout-minutes` for large data processing jobs:
-```yaml
-jobs:
-  compute-metrics:
-    timeout-minutes: 120  # 2 hours
-```
-
 ### R2 connection errors
 
-Verify R2 credentials and endpoint URL. Test locally first:
+Verify R2 credentials and endpoint URL. Test locally:
 ```bash
-python -c "from src.storage.r2_client import R2Client; R2Client().list_keys()"
+uv run python -c "from src.storage.r2_client import R2Client; R2Client().list_keys()"
 ```
+
+---
+
+## Migration from Old Workflows
+
+If you have the old separate workflows (`ingest-prices.yml`, `daily-evaluation.yml`, `compute-metrics.yml`), they are now consolidated into `daily-pipeline.yml`.
+
+**Old setup:**
+- 10 PM UTC: Ingest prices
+- 11 PM UTC: Evaluate signals
+- Weekly: Compute metrics
+
+**New setup:**
+- 11 PM UTC: Daily pipeline (all three steps in sequence)
+
+**Benefits:**
+- Simpler to monitor (one workflow instead of three)
+- Guaranteed execution order
+- Single failure notification
+- Easier to debug (all logs in one place)
 
 ---
 
@@ -224,12 +247,11 @@ python -c "from src.storage.r2_client import R2Client; R2Client().list_keys()"
 
 After workflows are set up:
 
-1. **Test manually**: Run each workflow via GitHub UI to verify
-2. **Monitor first runs**: Check logs and artifacts
+1. **Test manually**: Run daily pipeline via GitHub UI to verify
+2. **Monitor first scheduled run**: Check logs and artifacts
 3. **Set up alerts**: Configure `ALERT_EMAIL` for failure notifications
-4. **Add metrics**: Instrument code to track validation hooks
-5. **Optimize schedules**: Adjust cron times based on data availability
+4. **Review costs**: Monitor GitHub Actions usage in Settings → Billing
 
 ---
 
-**Note:** All workflows use `ubuntu-latest` runners and Python 3.10 for consistency with local development.
+**Note:** All workflows use `ubuntu-latest` runners, Python 3.10, and `uv` for fast, deterministic dependency installation.

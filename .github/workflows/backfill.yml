@@ -44,12 +44,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+        run: uv sync
 
       - name: Run backfill
         env:
@@ -63,9 +63,9 @@ jobs:
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
           echo "Backfilling ${{ github.event.inputs.dataset }}..."
-          python scripts/backfill_from_dolt.py \
+          uv run python scripts/backfill_from_dolt.py \
             --dataset ${{ github.event.inputs.dataset }} \
-            ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '' }} \
+            ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '--ticker-file tickers.txt' }} \
             ${{ github.event.inputs.start_date && format('--start-date {0}', github.event.inputs.start_date) || '' }} \
             ${{ github.event.inputs.end_date && format('--end-date {0}', github.event.inputs.end_date) || '' }}
 
@@ -89,7 +89,7 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: |
           echo "Verifying backfill results..."
-          python -c "
+          uv run python -c "
           from src.reader import TimeSeriesReader
           r = TimeSeriesReader()
           tickers = r.list_available_tickers('${{ github.event.inputs.dataset }}')

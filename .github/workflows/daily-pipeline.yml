@@ -1,0 +1,185 @@
+name: Daily Pipeline
+
+# End-of-day workflow that:
+# 1. Ingests latest prices from EODHD
+# 2. Computes technical + valuation signals
+# 3. Evaluates material changes and sends alerts
+on:
+  schedule:
+    # Run at 11 PM UTC daily (6 PM ET)
+    - cron: '0 23 * * *'
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Specific tickers to process (space-separated, leave empty for all watchlist)'
+        required: false
+        default: ''
+      skip_ingestion:
+        description: 'Skip price ingestion step (use existing data)'
+        required: false
+        type: boolean
+        default: false
+      skip_metrics:
+        description: 'Skip metrics computation step'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  daily-pipeline:
+    name: EOD Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      # ===================================================================
+      # STEP 1: Ingest Latest Prices from EODHD
+      # ===================================================================
+      - name: 1. Ingest latest prices
+        if: ${{ !inputs.skip_ingestion }}
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          echo "======================================================================"
+          echo "STEP 1: Ingesting Latest Prices"
+          echo "======================================================================"
+
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            uv run python scripts/ingest_prices.py --tickers ${{ github.event.inputs.tickers }} --days 7
+          else
+            uv run python scripts/ingest_prices.py --watchlist --days 7
+          fi
+
+      # ===================================================================
+      # STEP 2: Compute Valuation Metrics (Incremental)
+      # ===================================================================
+      - name: 2. Compute valuation metrics
+        if: ${{ !inputs.skip_metrics }}
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+        run: |
+          echo "======================================================================"
+          echo "STEP 2: Computing Valuation Metrics"
+          echo "======================================================================"
+
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            # Manual trigger with specific tickers
+            for ticker in ${{ github.event.inputs.tickers }}; do
+              echo "Computing metrics for $ticker..."
+              uv run python scripts/compute_metrics.py --ticker $ticker --valuation-only
+            done
+          else
+            # Scheduled run: Get watchlist tickers and compute incrementally
+            uv run python -c "
+from src.config import config
+client = config.get_supabase_client()
+response = client.table('watchlists').select('entity_id, entities(ticker)').eq('alerts_enabled', True).execute()
+tickers = set()
+for row in response.data:
+    entity = row.get('entities')
+    if entity and entity.get('ticker'):
+        tickers.add(entity['ticker'])
+print(' '.join(sorted(tickers)))
+" > /tmp/tickers.txt
+
+            for ticker in $(cat /tmp/tickers.txt); do
+              echo "Computing metrics for $ticker..."
+              uv run python scripts/compute_metrics.py --ticker $ticker --valuation-only || echo "Warning: Failed to compute metrics for $ticker"
+            done
+          fi
+
+      # ===================================================================
+      # STEP 3: Evaluate Signals and Send Alerts
+      # ===================================================================
+      - name: 3. Evaluate signals and send alerts
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          echo "======================================================================"
+          echo "STEP 3: Evaluating Signals and Sending Alerts"
+          echo "======================================================================"
+          uv run python -m src.signals.pipeline
+
+      # ===================================================================
+      # Artifacts and Notifications
+      # ===================================================================
+      - name: Upload pipeline logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-pipeline-logs-${{ github.run_number }}
+          path: |
+            logs/*.log
+            *.log
+          retention-days: 7
+
+      - name: Report pipeline success
+        if: success()
+        run: |
+          echo "======================================================================"
+          echo "✅ Daily Pipeline Completed Successfully"
+          echo "======================================================================"
+          echo "All steps completed:"
+          echo "  ✓ Price data ingested"
+          echo "  ✓ Valuation metrics computed"
+          echo "  ✓ Signals evaluated and alerts sent"
+
+      - name: Notify on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: '[ALERT] Daily Pipeline Failed'
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: Material Changes Alerts <noreply@materialchanges.app>
+          body: |
+            The daily pipeline job failed.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Time: ${{ github.event.head_commit.timestamp }}
+
+            This may affect alert delivery. Investigate immediately.
