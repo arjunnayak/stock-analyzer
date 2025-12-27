@@ -100,17 +100,7 @@ jobs:
             done
           else
             # Scheduled run: Get watchlist tickers and compute incrementally
-            uv run python -c "
-from src.config import config
-client = config.get_supabase_client()
-response = client.table('watchlists').select('entity_id, entities(ticker)').eq('alerts_enabled', True).execute()
-tickers = set()
-for row in response.data:
-    entity = row.get('entities')
-    if entity and entity.get('ticker'):
-        tickers.add(entity['ticker'])
-print(' '.join(sorted(tickers)))
-" > /tmp/tickers.txt
+            uv run python scripts/get_watchlist_tickers.py > /tmp/tickers.txt
 
             for ticker in $(cat /tmp/tickers.txt); do
               echo "Computing metrics for $ticker..."
