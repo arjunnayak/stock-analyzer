@@ -1,10 +1,7 @@
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 -- Create users table
 -- For MVP, keep it simple - we'll use Supabase auth later
 CREATE TABLE users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email VARCHAR(255) UNIQUE NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -19,7 +16,7 @@ CREATE TABLE users (
 
 -- Create entities table (stocks)
 CREATE TABLE entities (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     ticker VARCHAR(20) UNIQUE NOT NULL,
     name VARCHAR(255),
     sector VARCHAR(100),
@@ -44,7 +41,7 @@ CREATE TABLE entities (
 
 -- Create watchlists table (user <-> entity many-to-many)
 CREATE TABLE watchlists (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
 
@@ -60,7 +57,7 @@ CREATE TABLE watchlists (
 -- Create user_entity_settings table
 -- Stores per-user, per-stock configuration and state tracking
 CREATE TABLE user_entity_settings (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
 
@@ -90,7 +87,7 @@ CREATE TABLE user_entity_settings (
 -- Create alert_history table
 -- Track all alerts sent to users
 CREATE TABLE alert_history (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
 

@@ -84,22 +84,18 @@ def test_state_tracking():
     print("=" * 70)
 
     with StateTracker() as tracker:
-        # Get test user and entity
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-
+        # Get test user and entity using Supabase client
         from src.config import config
 
-        conn = psycopg2.connect(config.database_url)
+        client = config.get_supabase_client()
 
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id, email FROM users LIMIT 1")
-            user = cur.fetchone()
+        # Get first user
+        user_response = client.table("users").select("id, email").limit(1).execute()
+        user = user_response.data[0] if user_response.data else None
 
-            cur.execute("SELECT id, ticker FROM entities LIMIT 1")
-            entity = cur.fetchone()
-
-        conn.close()
+        # Get first entity
+        entity_response = client.table("entities").select("id, ticker").limit(1).execute()
+        entity = entity_response.data[0] if entity_response.data else None
 
         if not user or not entity:
             print("❌ ERROR: No test data in database")

@@ -9,9 +9,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 from src.config import config
 
 
@@ -56,13 +53,12 @@ class StateTracker:
     """Tracks and detects state changes for tickers."""
 
     def __init__(self):
-        """Initialize state tracker with database connection."""
-        self.conn = psycopg2.connect(config.database_url)
+        """Initialize state tracker with Supabase client."""
+        self.client = config.get_supabase_client()
 
     def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
+        """Close connections (no-op for Supabase client)."""
+        pass
 
     def __enter__(self):
         return self
@@ -82,39 +78,31 @@ class StateTracker:
         Returns:
             TickerState object (may be empty if no previous state)
         """
-        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    user_id, entity_id,
-                    last_valuation_regime, last_valuation_percentile,
-                    last_eps_direction, last_eps_value,
-                    last_trend_position, last_price_close,
-                    last_evaluated_at
-                FROM user_entity_settings
-                WHERE user_id = %s AND entity_id = %s
-                """,
-                (user_id, entity_id),
+        response = (
+            self.client.table("user_entity_settings")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("entity_id", entity_id)
+            .execute()
+        )
+
+        if response.data and len(response.data) > 0:
+            row = response.data[0]
+            return TickerState(
+                user_id=row["user_id"],
+                entity_id=row["entity_id"],
+                ticker=ticker,
+                last_valuation_regime=row.get("last_valuation_regime"),
+                last_valuation_percentile=row.get("last_valuation_percentile"),
+                last_eps_direction=row.get("last_eps_direction"),
+                last_eps_value=row.get("last_eps_value"),
+                last_trend_position=row.get("last_trend_position"),
+                last_price_close=row.get("last_price_close"),
+                last_evaluated_at=row.get("last_evaluated_at"),
             )
-
-            row = cur.fetchone()
-
-            if row:
-                return TickerState(
-                    user_id=row["user_id"],
-                    entity_id=row["entity_id"],
-                    ticker=ticker,
-                    last_valuation_regime=row["last_valuation_regime"],
-                    last_valuation_percentile=row["last_valuation_percentile"],
-                    last_eps_direction=row["last_eps_direction"],
-                    last_eps_value=row["last_eps_value"],
-                    last_trend_position=row["last_trend_position"],
-                    last_price_close=row["last_price_close"],
-                    last_evaluated_at=row["last_evaluated_at"],
-                )
-            else:
-                # No previous state - create empty state
-                return TickerState(user_id=user_id, entity_id=entity_id, ticker=ticker)
+        else:
+            # No previous state - create empty state
+            return TickerState(user_id=user_id, entity_id=entity_id, ticker=ticker)
 
     def update_state(
         self,
@@ -142,41 +130,28 @@ class StateTracker:
             trend_position: Current trend position
             price_close: Current closing price
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO user_entity_settings (
-                    user_id, entity_id,
-                    last_valuation_regime, last_valuation_percentile,
-                    last_eps_direction, last_eps_value,
-                    last_trend_position, last_price_close,
-                    last_evaluated_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (user_id, entity_id)
-                DO UPDATE SET
-                    last_valuation_regime = COALESCE(EXCLUDED.last_valuation_regime, user_entity_settings.last_valuation_regime),
-                    last_valuation_percentile = COALESCE(EXCLUDED.last_valuation_percentile, user_entity_settings.last_valuation_percentile),
-                    last_eps_direction = COALESCE(EXCLUDED.last_eps_direction, user_entity_settings.last_eps_direction),
-                    last_eps_value = COALESCE(EXCLUDED.last_eps_value, user_entity_settings.last_eps_value),
-                    last_trend_position = COALESCE(EXCLUDED.last_trend_position, user_entity_settings.last_trend_position),
-                    last_price_close = COALESCE(EXCLUDED.last_price_close, user_entity_settings.last_price_close),
-                    last_evaluated_at = NOW(),
-                    updated_at = NOW()
-                """,
-                (
-                    user_id,
-                    entity_id,
-                    valuation_regime,
-                    valuation_percentile,
-                    eps_direction,
-                    eps_value,
-                    trend_position,
-                    price_close,
-                ),
-            )
+        # Build update data - only include non-None values
+        data = {
+            "user_id": user_id,
+            "entity_id": entity_id,
+            "last_evaluated_at": datetime.now().isoformat(),
+        }
 
-        self.conn.commit()
+        if valuation_regime is not None:
+            data["last_valuation_regime"] = valuation_regime
+        if valuation_percentile is not None:
+            data["last_valuation_percentile"] = valuation_percentile
+        if eps_direction is not None:
+            data["last_eps_direction"] = eps_direction
+        if eps_value is not None:
+            data["last_eps_value"] = eps_value
+        if trend_position is not None:
+            data["last_trend_position"] = trend_position
+        if price_close is not None:
+            data["last_price_close"] = price_close
+
+        # Upsert (insert or update on conflict)
+        self.client.table("user_entity_settings").upsert(data).execute()
 
     def detect_trend_change(
         self, previous_state: TickerState, current_trend_position: str, current_price: float

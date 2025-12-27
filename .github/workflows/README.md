@@ -23,7 +23,8 @@ gh workflow run daily-evaluation.yml
 ```
 
 **Required secrets:**
-- `SUPABASE_DATABASE_URL` - PostgreSQL connection string
+- `SUPABASE_URL` - Supabase API URL (e.g., https://xxx.supabase.co)
+- `SUPABASE_SERVICE_ROLE_KEY` - Supabase service role key (full access for backend/CI)
 - `R2_ACCESS_KEY_ID` - Cloudflare R2 access key
 - `R2_SECRET_ACCESS_KEY` - Cloudflare R2 secret
 - `R2_ENDPOINT_URL` - R2 endpoint

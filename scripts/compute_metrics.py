@@ -5,7 +5,7 @@ Batch Metrics Computation CLI
 Computes valuation and technical metrics from stored price and fundamental data.
 
 Usage:
-    # Single ticker (for testing)
+    # Single ticker (auto-detects date range from available price data)
     python scripts/compute_metrics.py --ticker UBER
 
     # Multiple tickers
@@ -17,8 +17,10 @@ Usage:
     # All tickers
     python scripts/compute_metrics.py --all
 
-    # Date range
-    python scripts/compute_metrics.py --ticker UBER --start-date 2020-01-01
+    # Custom date range (optional - will auto-detect if omitted)
+    python scripts/compute_metrics.py --ticker UBER --start-date 2019-05-01
+    python scripts/compute_metrics.py --ticker UBER --end-date 2024-12-31
+    python scripts/compute_metrics.py --ticker UBER --start-date 2020-01-01 --end-date 2024-12-31
 
     # Only technical or valuation
     python scripts/compute_metrics.py --ticker UBER --technical-only
@@ -66,8 +68,14 @@ def parse_args():
     ticker_group.add_argument("--all", action="store_true", help="All tickers in storage")
 
     # Date range
-    parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
-    parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--start-date",
+        help="Start date (YYYY-MM-DD). If not provided, auto-detects from earliest available price data.",
+    )
+    parser.add_argument(
+        "--end-date",
+        help="End date (YYYY-MM-DD). If not provided, defaults to today.",
+    )
 
     # Metric selection
     parser.add_argument("--technical-only", action="store_true", help="Only compute technical metrics")
@@ -113,7 +121,9 @@ def main():
     print(f"Metrics: {metrics_mode}")
 
     if start_date or end_date:
-        print(f"Date range: {start_date or 'beginning'} to {end_date or 'latest'}")
+        print(f"Date range: {start_date or 'auto-detect'} to {end_date or 'today'}")
+    else:
+        print(f"Date range: Auto-detect from available price data")
 
     if args.dry_run:
         print("\n🏃 DRY RUN MODE - No data will be written")

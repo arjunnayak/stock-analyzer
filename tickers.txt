@@ -1,0 +1,15 @@
+# Example ticker list file
+# Lines starting with # are comments
+# One ticker per line
+NVDA
+MSFT
+GOOG
+META
+AVGO
+TSM
+NET
+CRWD
+MELI
+SE
+ADBE
+PLTR

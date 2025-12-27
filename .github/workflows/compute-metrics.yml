@@ -41,7 +41,9 @@ jobs:
 
       - name: Compute valuation metrics
         env:
-          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}

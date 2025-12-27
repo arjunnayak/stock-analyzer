@@ -38,8 +38,12 @@ jobs:
 
       - name: Run daily signal evaluation
         env:
-          # Database credentials
-          DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+          # Environment mode
+          ENV: REMOTE
+
+          # Supabase configuration
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
           # R2/S3 credentials
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

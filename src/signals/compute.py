@@ -33,6 +33,41 @@ class MetricsComputer:
         self.r2 = r2_client or R2Client()
         self.reader = TimeSeriesReader()
 
+    def detect_available_date_range(self, ticker: str) -> tuple[Optional[date], Optional[date]]:
+        """
+        Detect the available date range for a ticker by listing R2 keys.
+
+        Args:
+            ticker: Stock ticker
+
+        Returns:
+            Tuple of (min_date, max_date) or (None, None) if no data
+        """
+        # List all price files for this ticker
+        prefix = f"prices/v1/{ticker.upper()}/"
+        keys = self.r2.list_keys(prefix=prefix, max_keys=10000)
+
+        if not keys:
+            return None, None
+
+        # Parse dates from keys (format: prices/v1/TICKER/YYYY/MM/data.parquet)
+        dates = []
+        for key in keys:
+            parts = key.split("/")
+            if len(parts) >= 5:
+                try:
+                    year = int(parts[3])
+                    month = int(parts[4])
+                    # Use first day of month as representative date
+                    dates.append(date(year, month, 1))
+                except (ValueError, IndexError):
+                    continue
+
+        if not dates:
+            return None, None
+
+        return min(dates), max(dates)
+
     def compute_technical_metrics(
         self,
         ticker: str,
@@ -243,8 +278,8 @@ class MetricsComputer:
 
         Args:
             ticker: Stock ticker
-            start_date: Start date (optional)
-            end_date: End date (optional)
+            start_date: Start date (optional, auto-detects from available prices if None)
+            end_date: End date (optional, defaults to today if None)
             technical_only: Only compute technical metrics
             valuation_only: Only compute valuation metrics
             force: Recompute all dates
@@ -252,6 +287,27 @@ class MetricsComputer:
         Returns:
             Combined summary dict
         """
+        # Auto-detect date range from available price data if not provided
+        if start_date is None or end_date is None:
+            # Detect available date range by listing R2 keys (efficient)
+            detected_start, detected_end = self.detect_available_date_range(ticker)
+
+            if detected_start and detected_end:
+                if start_date is None:
+                    start_date = detected_start
+                    print(f"  ℹ️  Auto-detected start date: {start_date} (earliest available)")
+
+                if end_date is None:
+                    end_date = date.today()
+                    print(f"  ℹ️  Using today as end date: {end_date}")
+            else:
+                # No price data available
+                print(f"  ⚠️  No price data found in R2 for {ticker}")
+                if end_date is None:
+                    end_date = date.today()
+                if start_date is None:
+                    start_date = end_date
+
         results = []
 
         # Technical metrics

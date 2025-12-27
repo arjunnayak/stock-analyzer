@@ -39,3 +39,5 @@ data/
 # Docker volumes (if stored locally)
 postgres_data/
 minio_data/
+
+supabase/.temp/

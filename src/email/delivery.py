@@ -10,9 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import psycopg2
-from psycopg2.extras import Json, RealDictCursor
-
 from src.config import config
 from src.email.sender import EmailSender
 from src.email.templates import EmailTemplates
@@ -45,12 +42,11 @@ class EmailDeliveryService:
             email_sender: Email sender instance (creates new if not provided)
         """
         self.sender = email_sender or EmailSender()
-        self.db_conn = psycopg2.connect(config.database_url)
+        self.client = config.get_supabase_client()
 
     def close(self):
-        """Close database connection."""
-        if self.db_conn:
-            self.db_conn.close()
+        """Close connections (no-op for Supabase client)."""
+        pass
 
     def __enter__(self):
         return self
@@ -202,29 +198,19 @@ class EmailDeliveryService:
 
     def _log_delivery(self, result: DeliveryResult):
         """Log email delivery to database for validation metrics."""
-        with self.db_conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO email_deliveries (
-                    id, alert_id, user_id, entity_id,
-                    to_email, status, message_id, sent_at, error, created_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                """,
-                (
-                    str(uuid.uuid4()),
-                    result.alert_id,
-                    result.user_id,
-                    result.entity_id,
-                    result.to_email,
-                    result.status,
-                    result.message_id,
-                    result.sent_at,
-                    result.error,
-                ),
-            )
-
-        self.db_conn.commit()
+        self.client.table("email_deliveries").insert(
+            {
+                "id": str(uuid.uuid4()),
+                "alert_id": result.alert_id,
+                "user_id": result.user_id,
+                "entity_id": result.entity_id,
+                "to_email": result.to_email,
+                "status": result.status,
+                "message_id": result.message_id,
+                "sent_at": result.sent_at.isoformat() if result.sent_at else None,
+                "error": result.error,
+            }
+        ).execute()
 
         # Print log for batch job visibility
         if result.status == "sent":
@@ -234,31 +220,20 @@ class EmailDeliveryService:
 
     def _log_digest_delivery(self, result: DeliveryResult, alert_ids: list[str]):
         """Log digest email delivery."""
-        with self.db_conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO email_deliveries (
-                    id, alert_id, user_id, entity_id,
-                    to_email, status, message_id, sent_at, error,
-                    metadata, created_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                """,
-                (
-                    str(uuid.uuid4()),
-                    result.alert_id,
-                    result.user_id,
-                    result.entity_id,
-                    result.to_email,
-                    result.status,
-                    result.message_id,
-                    result.sent_at,
-                    result.error,
-                    Json({"alert_ids": alert_ids, "type": "digest"}),
-                ),
-            )
-
-        self.db_conn.commit()
+        self.client.table("email_deliveries").insert(
+            {
+                "id": str(uuid.uuid4()),
+                "alert_id": result.alert_id,
+                "user_id": result.user_id,
+                "entity_id": result.entity_id,
+                "to_email": result.to_email,
+                "status": result.status,
+                "message_id": result.message_id,
+                "sent_at": result.sent_at.isoformat() if result.sent_at else None,
+                "error": result.error,
+                "metadata": {"alert_ids": alert_ids, "type": "digest"},
+            }
+        ).execute()
 
         if result.status == "sent":
             print(f"  ✓ Digest sent to {result.to_email} ({len(alert_ids)} alerts)")
@@ -276,28 +251,29 @@ class EmailDeliveryService:
         Returns:
             Stats dict with sent, failed, opened counts
         """
-        with self.db_conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*) FILTER (WHERE status = 'sent') as sent_count,
-                    COUNT(*) FILTER (WHERE status = 'failed') as failed_count,
-                    COUNT(*) FILTER (WHERE opened_at IS NOT NULL) as opened_count
-                FROM email_deliveries
-                WHERE user_id = %s
-                  AND created_at >= NOW() - INTERVAL '%s days'
-                """,
-                (user_id, days),
-            )
+        from datetime import timedelta
 
-            row = cur.fetchone()
+        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
 
-            return {
-                "sent_count": row["sent_count"] or 0,
-                "failed_count": row["failed_count"] or 0,
-                "opened_count": row["opened_count"] or 0,
-                "open_rate": (row["opened_count"] / row["sent_count"] * 100) if row["sent_count"] > 0 else 0,
-            }
+        response = (
+            self.client.table("email_deliveries")
+            .select("status, opened_at")
+            .eq("user_id", user_id)
+            .gte("created_at", cutoff_date)
+            .execute()
+        )
+
+        # Compute stats in Python
+        sent_count = sum(1 for row in response.data if row["status"] == "sent")
+        failed_count = sum(1 for row in response.data if row["status"] == "failed")
+        opened_count = sum(1 for row in response.data if row.get("opened_at") is not None)
+
+        return {
+            "sent_count": sent_count,
+            "failed_count": failed_count,
+            "opened_count": opened_count,
+            "open_rate": (opened_count / sent_count * 100) if sent_count > 0 else 0,
+        }
 
     def track_email_open(self, alert_id: str):
         """
@@ -306,60 +282,45 @@ class EmailDeliveryService:
         Args:
             alert_id: Alert UUID
         """
-        with self.db_conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE email_deliveries
-                SET opened_at = NOW()
-                WHERE alert_id = %s
-                  AND opened_at IS NULL
-                """,
-                (alert_id,),
-            )
-
-        self.db_conn.commit()
+        # Update only if opened_at is null (first open only)
+        self.client.table("email_deliveries").update({"opened_at": datetime.now().isoformat()}).eq(
+            "alert_id", alert_id
+        ).is_("opened_at", "null").execute()
 
 
 def create_email_deliveries_table():
-    """Create email_deliveries table for logging (migration)."""
-    sql = """
-    CREATE TABLE IF NOT EXISTS email_deliveries (
-        id UUID PRIMARY KEY,
-        alert_id UUID NOT NULL,  -- References alert_history.id or 'digest'
-        user_id UUID NOT NULL REFERENCES users(id),
-        entity_id UUID REFERENCES entities(id),  -- NULL for digests
-        to_email TEXT NOT NULL,
-        status TEXT NOT NULL,  -- 'sent', 'failed', 'skipped'
-        message_id TEXT,  -- Email Message-ID for tracking
-        sent_at TIMESTAMP,
-        opened_at TIMESTAMP,  -- Tracked via pixel
-        error TEXT,
-        metadata JSONB,  -- Additional data (e.g., digest alert IDs)
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_email_deliveries_user_created
-        ON email_deliveries(user_id, created_at DESC);
-
-    CREATE INDEX IF NOT EXISTS idx_email_deliveries_alert
-        ON email_deliveries(alert_id);
-
-    CREATE INDEX IF NOT EXISTS idx_email_deliveries_status
-        ON email_deliveries(status);
     """
+    Create email_deliveries table for logging (migration).
 
-    conn = psycopg2.connect(config.database_url)
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.commit()
-        print("✓ email_deliveries table created")
-    finally:
-        conn.close()
+    NOTE: This function is deprecated. Use Supabase migrations instead.
+    For development/testing, the table should be created via:
+    - supabase/migrations/*.sql files
+    - Applied with: supabase db push
+
+    This function is kept for backward compatibility but may not work
+    with Supabase client (which doesn't support raw SQL DDL).
+    """
+    print("⚠️  create_email_deliveries_table() is deprecated")
+    print("   Use Supabase migrations instead:")
+    print("   1. Add table definition to supabase/migrations/")
+    print("   2. Run: supabase db push")
+    print()
+    print("   Table schema:")
+    print("   - id UUID PRIMARY KEY")
+    print("   - alert_id UUID NOT NULL")
+    print("   - user_id UUID NOT NULL REFERENCES users(id)")
+    print("   - entity_id UUID REFERENCES entities(id)")
+    print("   - to_email TEXT NOT NULL")
+    print("   - status TEXT NOT NULL")
+    print("   - message_id TEXT")
+    print("   - sent_at TIMESTAMP")
+    print("   - opened_at TIMESTAMP")
+    print("   - error TEXT")
+    print("   - metadata JSONB")
+    print("   - created_at TIMESTAMP NOT NULL DEFAULT NOW()")
 
 
 if __name__ == "__main__":
     # Create table if needed
     print("Setting up email delivery infrastructure...")
     create_email_deliveries_table()
-    print("✓ Setup complete")

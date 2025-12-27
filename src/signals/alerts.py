@@ -13,9 +13,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-import psycopg2
-from psycopg2.extras import Json
-
 from src.config import config
 from src.signals.state_tracker import StateChange
 
@@ -267,13 +264,12 @@ class AlertRepository:
     """Store and retrieve alerts from database."""
 
     def __init__(self):
-        """Initialize repository with database connection."""
-        self.conn = psycopg2.connect(config.database_url)
+        """Initialize repository with Supabase client."""
+        self.client = config.get_supabase_client()
 
     def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
+        """Close connections (no-op for Supabase client)."""
+        pass
 
     def __enter__(self):
         return self
@@ -293,36 +289,26 @@ class AlertRepository:
         Returns:
             Alert UUID
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO alert_history (
-                    user_id, entity_id, alert_type,
-                    headline, what_changed, why_it_matters,
-                    before_vs_now, what_didnt_change,
-                    data_snapshot, sent_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id
-                """,
-                (
-                    user_id,
-                    entity_id,
-                    alert.alert_type,
-                    alert.headline,
-                    alert.what_changed,
-                    alert.why_it_matters,
-                    alert.before_vs_now,
-                    alert.what_didnt_change,
-                    Json(alert.data_snapshot),
-                    alert.timestamp,
-                ),
+        response = (
+            self.client.table("alert_history")
+            .insert(
+                {
+                    "user_id": user_id,
+                    "entity_id": entity_id,
+                    "alert_type": alert.alert_type,
+                    "headline": alert.headline,
+                    "what_changed": alert.what_changed,
+                    "why_it_matters": alert.why_it_matters,
+                    "before_vs_now": alert.before_vs_now,
+                    "what_didnt_change": alert.what_didnt_change,
+                    "data_snapshot": alert.data_snapshot,
+                    "sent_at": alert.timestamp.isoformat(),
+                }
             )
+            .execute()
+        )
 
-            alert_id = cur.fetchone()[0]
-
-        self.conn.commit()
-        return alert_id
+        return response.data[0]["id"]
 
     def get_recent_alerts(self, user_id: str, limit: int = 10) -> list[dict]:
         """
@@ -335,25 +321,33 @@ class AlertRepository:
         Returns:
             List of alert dictionaries
         """
-        with self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    ah.id, ah.alert_type, ah.headline,
-                    ah.what_changed, ah.why_it_matters,
-                    ah.before_vs_now, ah.what_didnt_change,
-                    ah.sent_at, ah.opened_at,
-                    e.ticker
-                FROM alert_history ah
-                JOIN entities e ON ah.entity_id = e.id
-                WHERE ah.user_id = %s
-                ORDER BY ah.sent_at DESC
-                LIMIT %s
-                """,
-                (user_id, limit),
-            )
+        response = (
+            self.client.table("alert_history")
+            .select("id, alert_type, headline, what_changed, why_it_matters, before_vs_now, what_didnt_change, sent_at, opened_at, entity_id, entities(ticker)")
+            .eq("user_id", user_id)
+            .order("sent_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
 
-            return [dict(row) for row in cur.fetchall()]
+        # Flatten the entities relationship into ticker field
+        results = []
+        for row in response.data:
+            alert_dict = {
+                "id": row["id"],
+                "alert_type": row["alert_type"],
+                "headline": row["headline"],
+                "what_changed": row["what_changed"],
+                "why_it_matters": row["why_it_matters"],
+                "before_vs_now": row["before_vs_now"],
+                "what_didnt_change": row["what_didnt_change"],
+                "sent_at": row["sent_at"],
+                "opened_at": row["opened_at"],
+                "ticker": row["entities"]["ticker"] if row.get("entities") else None,
+            }
+            results.append(alert_dict)
+
+        return results
 
 
 if __name__ == "__main__":

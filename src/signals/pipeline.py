@@ -11,9 +11,6 @@ Main orchestrator that:
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
 from src.config import config
 from src.email.delivery import EmailDeliveryService
 from src.reader import TimeSeriesReader
@@ -36,7 +33,7 @@ class SignalPipeline:
         self.reader = TimeSeriesReader()
         self.state_tracker = StateTracker()
         self.alert_repo = AlertRepository()
-        self.db_conn = psycopg2.connect(config.database_url)
+        self.client = config.get_supabase_client()
 
         # Email delivery (optional)
         self.enable_email = enable_email
@@ -55,8 +52,6 @@ class SignalPipeline:
         self.alert_repo.close()
         if self.email_service:
             self.email_service.close()
-        if self.db_conn:
-            self.db_conn.close()
 
     def __enter__(self):
         return self
@@ -71,25 +66,33 @@ class SignalPipeline:
         Returns:
             List of dicts with user_id, entity_id, ticker, email
         """
-        with self.db_conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    w.user_id,
-                    w.entity_id,
-                    e.ticker,
-                    u.email,
-                    u.alerts_enabled AS user_alerts_enabled,
-                    w.alerts_enabled AS watchlist_alerts_enabled
-                FROM watchlists w
-                JOIN users u ON w.user_id = u.id
-                JOIN entities e ON w.entity_id = e.id
-                WHERE u.alerts_enabled = true
-                  AND w.alerts_enabled = true
-                """
-            )
+        response = (
+            self.client.table("watchlists")
+            .select("user_id, entity_id, alerts_enabled, users(email, alerts_enabled), entities(ticker)")
+            .eq("alerts_enabled", True)
+            .execute()
+        )
 
-            return [dict(row) for row in cur.fetchall()]
+        # Filter where both user and watchlist have alerts enabled, and flatten nested data
+        results = []
+        for row in response.data:
+            user = row.get("users")
+            entity = row.get("entities")
+
+            # Only include if user alerts are enabled
+            if user and user.get("alerts_enabled") and entity:
+                results.append(
+                    {
+                        "user_id": row["user_id"],
+                        "entity_id": row["entity_id"],
+                        "ticker": entity["ticker"],
+                        "email": user["email"],
+                        "user_alerts_enabled": user["alerts_enabled"],
+                        "watchlist_alerts_enabled": row["alerts_enabled"],
+                    }
+                )
+
+        return results
 
     def evaluate_ticker_for_user(
         self, user_id: str, entity_id: str, ticker: str, lookback_days: int = 365
@@ -257,10 +260,11 @@ class SignalPipeline:
         Returns:
             Email address or None
         """
-        with self.db_conn.cursor() as cur:
-            cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
-            row = cur.fetchone()
-            return row[0] if row else None
+        response = self.client.table("users").select("email").eq("id", user_id).execute()
+
+        if response.data and len(response.data) > 0:
+            return response.data[0]["email"]
+        return None
 
     def run_daily_evaluation(self) -> dict:
         """
