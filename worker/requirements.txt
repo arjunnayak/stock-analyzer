@@ -1,0 +1,10 @@
+# Cloudflare Worker Python Dependencies
+
+# Note: Cloudflare Workers has limited package support
+# Only include packages that are compatible with the Workers runtime
+
+# Supabase client (if available in Workers runtime)
+# supabase-py>=2.0.0
+
+# For now, we'll use direct HTTP requests to Supabase REST API
+# No additional dependencies needed - use built-in fetch API
