@@ -62,7 +62,7 @@ class UserService:
                 watchlist_service = WatchlistService(self.db)
 
                 for ticker in tickers:
-                    await watchlist_service.add_stock(user_id, ticker.upper())
+                    watchlist_service.add_stock(user_id, ticker.upper())
 
             logger.info(f"User {user_id} completed onboarding with {len(tickers or [])} stocks")
 

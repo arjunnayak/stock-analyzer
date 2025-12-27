@@ -46,7 +46,7 @@ def error_response(message, status=400):
     }, status=status)
 
 
-def handle_request(request):
+async def handle_request(request):
     """
     Main request handler
 
@@ -70,13 +70,13 @@ def handle_request(request):
         # Route to appropriate handler
         if parts[0] == 'api':
             if parts[1] == 'user':
-                return handle_user(request, parts[2:], db)
+                return await handle_user(request, parts[2:], db)
             elif parts[1] == 'watchlist':
-                return handle_watchlist(request, parts[2:], db)
+                return await handle_watchlist(request, parts[2:], db)
             elif parts[1] == 'entities':
-                return handle_entities(request, parts[2:], db)
+                return await handle_entities(request, parts[2:], db)
             elif parts[1] == 'alerts':
-                return handle_alerts(request, parts[2:], db)
+                return await handle_alerts(request, parts[2:], db)
             elif parts[1] == 'health':
                 return json_response({'status': 'ok', 'service': 'material-changes-api'})
 
@@ -94,7 +94,7 @@ def handle_request(request):
 # USER ROUTES
 # ============================================================================
 
-def handle_user(request, parts, db):
+async def handle_user(request, parts, db):
     """
     Handle /api/user/* routes
 
@@ -137,7 +137,7 @@ def handle_user(request, parts, db):
 # WATCHLIST ROUTES
 # ============================================================================
 
-def handle_watchlist(request, parts, db):
+async def handle_watchlist(request, parts, db):
     """
     Handle /api/watchlist/* routes
 
@@ -180,7 +180,7 @@ def handle_watchlist(request, parts, db):
 # ENTITIES ROUTES
 # ============================================================================
 
-def handle_entities(request, parts, db):
+async def handle_entities(request, parts, db):
     """
     Handle /api/entities/* routes
 
@@ -222,7 +222,7 @@ def handle_entities(request, parts, db):
 # ALERTS ROUTES
 # ============================================================================
 
-def handle_alerts(request, parts, db):
+async def handle_alerts(request, parts, db):
     """
     Handle /api/alerts/* routes
 
