@@ -35,6 +35,7 @@ jobs:
     name: Backfill ${{ github.event.inputs.dataset }}
     runs-on: ubuntu-latest
     timeout-minutes: 240  # 4 hours for large backfills
+    environment: prod-actions
 
     steps:
       - name: Checkout code

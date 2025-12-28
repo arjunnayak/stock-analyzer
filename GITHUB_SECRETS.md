@@ -22,28 +22,28 @@ https://github.com/[your-username]/stock-analyzer/settings/secrets/actions
 
 ### R2 Storage Secrets
 
-**Name:** `R2_ACCESS_KEY_ID`  
-**Value:** `d8163735a0211f8686a8623542a0c1e1`  
+**Name:** `R2_ACCESS_KEY_ID`
+**Value:** `[Your R2 access key ID]`
 **Description:** Cloudflare R2 access key ID
 
-**Name:** `R2_SECRET_ACCESS_KEY`  
-**Value:** `27ea4c2a22f5e23b875b7aff9127f207b95ef6a64add9c2f6be2dbf974c9efee`  
+**Name:** `R2_SECRET_ACCESS_KEY`
+**Value:** `[Your R2 secret access key]`
 **Description:** Cloudflare R2 secret access key
 
-**Name:** `R2_ENDPOINT_URL`  
-**Value:** `https://68bea3930baeaf37663861d6187827b9.r2.cloudflarestorage.com`  
+**Name:** `R2_ENDPOINT_URL`
+**Value:** `https://[account-id].r2.cloudflarestorage.com`
 **Description:** Cloudflare R2 endpoint URL (without bucket name)
 
-**Name:** `R2_BUCKET_NAME`  
-**Value:** `stock-analyzer`  
+**Name:** `R2_BUCKET_NAME`
+**Value:** `stock-analyzer`
 **Description:** R2 bucket name
 
 ---
 
 ### External API Secrets
 
-**Name:** `EODHD_API_KEY`  
-**Value:** `694d85a8b6c134.94799173`  
+**Name:** `EODHD_API_KEY`
+**Value:** `[Your EODHD API key]`
 **Description:** EODHD Financial Data API key
 
 ---

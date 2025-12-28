@@ -32,6 +32,7 @@ jobs:
     name: EOD Pipeline
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: prod-actions
 
     steps:
       - name: Checkout code
