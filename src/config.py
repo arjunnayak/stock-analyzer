@@ -138,6 +138,28 @@ class Config:
 config = Config()
 
 
+# Helper functions for quick access
+def get_supabase_client():
+    """
+    Get a Supabase client instance configured for the current environment.
+
+    Returns:
+        Supabase client with service role key (full access) for backend/CI use
+    """
+    return config.get_supabase_client()
+
+
+def get_r2_client():
+    """
+    Get an R2 storage client instance configured for the current environment.
+
+    Returns:
+        R2Client instance for object storage operations
+    """
+    from src.storage.r2_client import R2Client
+    return R2Client()
+
+
 if __name__ == "__main__":
     # Test configuration
     print("Configuration Test")

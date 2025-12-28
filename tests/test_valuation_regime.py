@@ -338,8 +338,8 @@ class TestValuationRegime:
 
         fundamentals_df = pd.DataFrame({
             'date': quarters,
-            'period': ['Q' + str((i % 4) + 1) for i in range(20)],
-            'sales': np.full(20, 250_000_000),  # $250M per quarter
+            'period': ['Quarter'] * 20,  # Match implementation filter
+            'revenue': np.full(20, 250_000_000),  # $250M per quarter
             'income_before_depreciation': np.full(20, 50_000_000),  # $50M EBITDA per quarter
         })
 
