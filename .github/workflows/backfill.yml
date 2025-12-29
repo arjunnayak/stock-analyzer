@@ -52,7 +52,8 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Run backfill
+      - name: Run backfill (raw data)
+        if: ${{ github.event.inputs.dataset == 'prices' || github.event.inputs.dataset == 'fundamentals' }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -63,12 +64,51 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
-          echo "Backfilling ${{ github.event.inputs.dataset }}..."
+          echo "Backfilling ${{ github.event.inputs.dataset }} from Dolt..."
           uv run python scripts/backfill_from_dolt.py \
             --dataset ${{ github.event.inputs.dataset }} \
             ${{ github.event.inputs.tickers && format('--tickers {0}', github.event.inputs.tickers) || '--ticker-file tickers.txt' }} \
             ${{ github.event.inputs.start_date && format('--start-date {0}', github.event.inputs.start_date) || '' }} \
             ${{ github.event.inputs.end_date && format('--end-date {0}', github.event.inputs.end_date) || '' }}
+
+      - name: Compute signals (technical/valuation)
+        if: ${{ github.event.inputs.dataset == 'technical' || github.event.inputs.dataset == 'valuation' }}
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          echo "Computing ${{ github.event.inputs.dataset }} signals..."
+
+          # Determine flag based on dataset
+          if [ "${{ github.event.inputs.dataset }}" = "technical" ]; then
+            SIGNAL_FLAG="--technical-only"
+          else
+            SIGNAL_FLAG="--valuation-only"
+          fi
+
+          # Get tickers list
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            TICKERS="${{ github.event.inputs.tickers }}"
+          else
+            TICKERS=$(cat tickers.txt | tr '\n' ' ')
+          fi
+
+          # Compute for each ticker with --force to recompute all dates
+          for ticker in $TICKERS; do
+            echo "Computing signals for $ticker..."
+            uv run python scripts/compute_metrics.py \
+              --ticker $ticker \
+              $SIGNAL_FLAG \
+              --force \
+              ${{ github.event.inputs.start_date && format('--start-date {0}', github.event.inputs.start_date) || '' }} \
+              ${{ github.event.inputs.end_date && format('--end-date {0}', github.event.inputs.end_date) || '' }} \
+              || echo "Warning: Failed to compute signals for $ticker"
+          done
 
       - name: Upload backfill logs
         if: always()

@@ -75,9 +75,9 @@ jobs:
           fi
 
       # ===================================================================
-      # STEP 2: Compute Valuation Metrics (Incremental)
+      # STEP 2: Compute Technical + Valuation Metrics (Incremental)
       # ===================================================================
-      - name: 2. Compute valuation metrics
+      - name: 2. Compute technical and valuation metrics
         if: ${{ !inputs.skip_metrics }}
         env:
           ENV: REMOTE
@@ -90,14 +90,14 @@ jobs:
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
           echo "======================================================================"
-          echo "STEP 2: Computing Valuation Metrics"
+          echo "STEP 2: Computing Technical + Valuation Metrics"
           echo "======================================================================"
 
           if [ -n "${{ github.event.inputs.tickers }}" ]; then
             # Manual trigger with specific tickers
             for ticker in ${{ github.event.inputs.tickers }}; do
               echo "Computing metrics for $ticker..."
-              uv run python scripts/compute_metrics.py --ticker $ticker --valuation-only
+              uv run python scripts/compute_metrics.py --ticker $ticker
             done
           else
             # Scheduled run: Get watchlist tickers and compute incrementally
@@ -105,7 +105,7 @@ jobs:
 
             for ticker in $(cat /tmp/tickers.txt); do
               echo "Computing metrics for $ticker..."
-              uv run python scripts/compute_metrics.py --ticker $ticker --valuation-only || echo "Warning: Failed to compute metrics for $ticker"
+              uv run python scripts/compute_metrics.py --ticker $ticker || echo "Warning: Failed to compute metrics for $ticker"
             done
           fi
 

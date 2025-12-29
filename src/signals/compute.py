@@ -202,6 +202,29 @@ class MetricsComputer:
 
         print(f"  ✓ Fetched {len(fundamentals_df)} quarterly fundamental rows from R2")
 
+        # Determine which dates need computation (incremental)
+        if not force:
+            dates_to_compute = self.get_missing_dates(
+                "signals_valuation", ticker, list(prices_df["date"].dt.date)
+            )
+
+            if not dates_to_compute:
+                print("  → All dates up to date (use --force to recompute)")
+                return {
+                    "ticker": ticker,
+                    "dataset": "valuation",
+                    "status": "up_to_date",
+                    "rows": 0,
+                    "files": 0,
+                }
+
+            print(f"  → Computing for {len(dates_to_compute)} dates (missing + recent)")
+
+            # Filter prices to dates we need to compute
+            prices_df = prices_df[prices_df["date"].dt.date.isin(dates_to_compute)]
+        else:
+            print(f"  → Force mode: computing for all {len(prices_df)} dates")
+
         # Compute EV/Revenue
         print("  → Computing EV/Revenue...")
         ev_revenue_df = ValuationSignals.compute_ev_revenue(prices_df, fundamentals_df)

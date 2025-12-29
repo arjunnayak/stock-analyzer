@@ -1,0 +1,91 @@
+name: Verify Data Availability
+
+# Manual workflow to check data availability in R2 storage
+on:
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Specific tickers to check (space-separated, leave empty for all watchlist)'
+        required: false
+        default: ''
+      verbose:
+        description: 'Show detailed per-ticker information'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  verify-data:
+    name: Verify R2 Data Availability
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: prod-actions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Verify data availability
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          echo "======================================================================"
+          echo "DATA AVAILABILITY VERIFICATION"
+          echo "======================================================================"
+
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            # Check specific tickers
+            if [ "${{ github.event.inputs.verbose }}" == "true" ]; then
+              uv run python scripts/verify_data_availability.py --tickers ${{ github.event.inputs.tickers }} --verbose
+            else
+              uv run python scripts/verify_data_availability.py --tickers ${{ github.event.inputs.tickers }}
+            fi
+          else
+            # Check all watchlist tickers
+            if [ "${{ github.event.inputs.verbose }}" == "true" ]; then
+              uv run python scripts/verify_data_availability.py --watchlist --verbose
+            else
+              uv run python scripts/verify_data_availability.py --watchlist
+            fi
+          fi
+
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-verification-report-${{ github.run_number }}
+          path: |
+            *.log
+          retention-days: 7
+
+      - name: Report success
+        if: success()
+        run: |
+          echo "======================================================================"
+          echo "✅ Data Verification Completed Successfully"
+          echo "======================================================================"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "======================================================================"
+          echo "❌ Data Verification Failed"
+          echo "======================================================================"
+          echo "Check the logs above for details on missing data or errors."
