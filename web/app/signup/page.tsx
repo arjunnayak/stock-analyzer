@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { signInWithEmail } from '@/lib/supabase/auth'
+import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import Link from 'next/link'
 
 export default function SignupPage() {
@@ -98,6 +99,17 @@ export default function SignupPage() {
             {loading ? 'Sending link...' : 'Continue with email'}
           </button>
         </form>
+
+        <div className="relative my-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-gray-300" />
+          </div>
+          <div className="relative flex justify-center text-sm">
+            <span className="px-2 bg-white text-gray-500">Or continue with</span>
+          </div>
+        </div>
+
+        <GoogleSignInButton disabled={loading} />
 
         <div className="text-center">
           <p className="text-sm text-gray-600">

@@ -16,3 +16,6 @@ dependencies = [
     "scipy>=1.10.0",
     "requests>=2.31.0",
 ]
+
+[tool.uv.workspace]
+members = ["worker"]

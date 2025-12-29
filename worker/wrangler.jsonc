@@ -1,0 +1,35 @@
+/**
+ * Cloudflare Worker Configuration for Material Changes API
+ * For more details: https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "stock-analyzer-api",
+	"main": "src/index.py",
+	"compatibility_date": "2025-12-28",
+	"compatibility_flags": [
+		"python_workers"
+	],
+	"observability": {
+		"enabled": true
+	},
+	/**
+	 * Environment Variables
+	 * Note: Use secrets to store sensitive data.
+	 * https://developers.cloudflare.com/workers/configuration/secrets/
+	 */
+	"vars": {
+		"ENVIRONMENT": "production"
+	},
+	/**
+	 * R2 Bucket binding for market data
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/r2/
+	 */
+	// Uncomment when ready to use:
+	"r2_buckets": [
+	  {
+	    "binding": "BUCKET",
+	    "bucket_name": "stock-analyzer"
+	  }
+	]
+}

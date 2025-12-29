@@ -58,34 +58,27 @@ GET /api/health
 - Python 3.11+
 - Supabase running locally
 
-### Setup
+You can run the Worker defined by your new project by executing `wrangler dev` in this
+directory. This will start up an HTTP server and will allow you to iterate on your
+Worker without having to restart `wrangler`.
 
-1. **Install Wrangler CLI**
+### Types and autocomplete
 
-```bash
-npm install -g wrangler
+This project also includes a pyproject.toml with some requirements which
+set up autocomplete and type hints for this Python Workers project.
+
+To get these installed you'll need `uv`, which you can install by following
+https://docs.astral.sh/uv/getting-started/installation/.
+
+Once `uv` is installed, you can run the following:
+
+```
+uv venv
+uv sync
 ```
 
-2. **Login to Cloudflare**
-
-```bash
-wrangler login
-```
-
-3. **Set up local environment**
-
-```bash
-# Copy environment file
-cp .dev.vars.example .dev.vars
-
-# Edit .dev.vars with your local Supabase credentials
-```
-
-4. **Run locally**
-
-```bash
-wrangler dev
-```
+Then point your editor's Python plugin at the `.venv` directory. You should then have working
+autocomplete and type information in your editor.
 
 The Worker will be available at http://localhost:8787
 

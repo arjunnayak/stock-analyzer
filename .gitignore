@@ -41,3 +41,6 @@ postgres_data/
 minio_data/
 
 supabase/.temp/
+
+node_modules/
+.dev.vars
