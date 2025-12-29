@@ -130,6 +130,27 @@ class Config:
 
         return create_client(url, key)
 
+    async def get_async_supabase_client(self):
+        """
+        Get an async Supabase client instance configured for the current environment.
+
+        Returns:
+            Async Supabase client with service role key (full access) for backend/CI use
+        """
+        from supabase import acreate_client
+
+        url = self.supabase_url
+        key = self.supabase_service_role_key
+
+        if not url or not key:
+            raise ValueError(
+                f"Supabase configuration incomplete. "
+                f"URL: {'✓' if url else '✗'}, "
+                f"Service Role Key: {'✓' if key else '✗'}"
+            )
+
+        return await acreate_client(url, key)
+
     def __repr__(self) -> str:
         return f"Config(env={self.env}, is_local={self.is_local})"
 
@@ -147,6 +168,16 @@ def get_supabase_client():
         Supabase client with service role key (full access) for backend/CI use
     """
     return config.get_supabase_client()
+
+
+async def get_async_supabase_client():
+    """
+    Get an async Supabase client instance configured for the current environment.
+
+    Returns:
+        Async Supabase client with service role key (full access) for backend/CI use
+    """
+    return await config.get_async_supabase_client()
 
 
 def get_r2_client():
