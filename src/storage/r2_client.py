@@ -5,7 +5,7 @@ Handles reading and writing Parquet files to R2-compatible storage (MinIO locall
 """
 
 import io
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -224,6 +224,229 @@ class R2Client:
             return []
 
         return [obj["Key"] for obj in response["Contents"]]
+
+    # =========================================================================
+    # Date-Partitioned Features (features/v1/date=YYYY-MM-DD/)
+    # =========================================================================
+
+    def build_features_key(self, run_date: date, part: int = 0) -> str:
+        """
+        Build storage key for date-partitioned features.
+
+        Pattern: features/v1/date=YYYY-MM-DD/part-{part:03d}.parquet
+
+        Args:
+            run_date: Date of the feature snapshot
+            part: Part number (default: 0)
+
+        Returns:
+            Storage key path
+        """
+        date_str = run_date.strftime("%Y-%m-%d")
+        return f"features/v1/date={date_str}/part-{part:03d}.parquet"
+
+    def build_features_latest_key(self) -> str:
+        """
+        Build storage key for latest features snapshot.
+
+        Returns:
+            Storage key: features/v1/latest.parquet
+        """
+        return "features/v1/latest.parquet"
+
+    def put_features(self, run_date: date, df: pd.DataFrame) -> str:
+        """
+        Write daily features snapshot to R2.
+
+        Args:
+            run_date: Date of the snapshot
+            df: DataFrame with feature columns
+
+        Returns:
+            Key that was written
+        """
+        key = self.build_features_key(run_date)
+        self.put_parquet(key, df)
+        return key
+
+    def put_features_latest(self, df: pd.DataFrame) -> str:
+        """
+        Write/overwrite latest features snapshot.
+
+        Args:
+            df: DataFrame with feature columns
+
+        Returns:
+            Key that was written
+        """
+        key = self.build_features_latest_key()
+        self.put_parquet(key, df)
+        return key
+
+    def get_features(self, run_date: date) -> Optional[pd.DataFrame]:
+        """
+        Read features for a specific date.
+
+        Args:
+            run_date: Date of the snapshot
+
+        Returns:
+            DataFrame or None if not found
+        """
+        key = self.build_features_key(run_date)
+        return self.get_parquet(key)
+
+    def get_features_latest(self) -> Optional[pd.DataFrame]:
+        """
+        Read latest features snapshot.
+
+        Returns:
+            DataFrame or None if not found
+        """
+        key = self.build_features_latest_key()
+        return self.get_parquet(key)
+
+    def get_features_range(
+        self, start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        """
+        Read features across a date range.
+
+        Args:
+            start_date: Start date (inclusive)
+            end_date: End date (inclusive)
+
+        Returns:
+            Concatenated DataFrame
+        """
+        dfs = []
+        current = start_date
+
+        while current <= end_date:
+            df = self.get_features(current)
+            if df is not None and not df.empty:
+                dfs.append(df)
+            current += timedelta(days=1)
+
+        if not dfs:
+            return pd.DataFrame()
+
+        return pd.concat(dfs, ignore_index=True)
+
+    def list_feature_dates(self, limit: int = 1000) -> list[date]:
+        """
+        List all available feature dates.
+
+        Returns:
+            List of dates (sorted descending)
+        """
+        prefix = "features/v1/date="
+        keys = self.list_keys(prefix=prefix, max_keys=limit)
+
+        dates = []
+        for key in keys:
+            # Extract date from key like: features/v1/date=2024-12-01/part-000.parquet
+            try:
+                date_part = key.split("date=")[1].split("/")[0]
+                dates.append(date.fromisoformat(date_part))
+            except (IndexError, ValueError):
+                continue
+
+        return sorted(set(dates), reverse=True)
+
+    # =========================================================================
+    # Alert Triggers (alerts_eval/v1/date=YYYY-MM-DD/)
+    # =========================================================================
+
+    def build_triggers_key(self, run_date: date) -> str:
+        """
+        Build storage key for template trigger results.
+
+        Pattern: alerts_eval/v1/date=YYYY-MM-DD/triggers.parquet
+
+        Args:
+            run_date: Date of evaluation
+
+        Returns:
+            Storage key path
+        """
+        date_str = run_date.strftime("%Y-%m-%d")
+        return f"alerts_eval/v1/date={date_str}/triggers.parquet"
+
+    def put_triggers(self, run_date: date, df: pd.DataFrame) -> str:
+        """
+        Write template trigger results.
+
+        Args:
+            run_date: Date of evaluation
+            df: DataFrame with trigger data
+
+        Returns:
+            Key that was written
+        """
+        key = self.build_triggers_key(run_date)
+        self.put_parquet(key, df)
+        return key
+
+    def get_triggers(self, run_date: date) -> Optional[pd.DataFrame]:
+        """
+        Read template triggers for a specific date.
+
+        Args:
+            run_date: Date of evaluation
+
+        Returns:
+            DataFrame or None if not found
+        """
+        key = self.build_triggers_key(run_date)
+        return self.get_parquet(key)
+
+    # =========================================================================
+    # Price Snapshots (prices_snapshots/v1/date=YYYY-MM-DD/)
+    # =========================================================================
+
+    def build_price_snapshot_key(self, run_date: date) -> str:
+        """
+        Build storage key for daily price snapshot.
+
+        Pattern: prices_snapshots/v1/date=YYYY-MM-DD/close.parquet
+
+        Args:
+            run_date: Date of the snapshot
+
+        Returns:
+            Storage key path
+        """
+        date_str = run_date.strftime("%Y-%m-%d")
+        return f"prices_snapshots/v1/date={date_str}/close.parquet"
+
+    def put_price_snapshot(self, run_date: date, df: pd.DataFrame) -> str:
+        """
+        Write daily price snapshot.
+
+        Args:
+            run_date: Date of the snapshot
+            df: DataFrame with columns: date, ticker, close, volume
+
+        Returns:
+            Key that was written
+        """
+        key = self.build_price_snapshot_key(run_date)
+        self.put_parquet(key, df)
+        return key
+
+    def get_price_snapshot(self, run_date: date) -> Optional[pd.DataFrame]:
+        """
+        Read price snapshot for a specific date.
+
+        Args:
+            run_date: Date of the snapshot
+
+        Returns:
+            DataFrame or None if not found
+        """
+        key = self.build_price_snapshot_key(run_date)
+        return self.get_parquet(key)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 name: Daily Pipeline
 
 # End-of-day workflow that:
-# 1. Ingests latest prices from EODHD
-# 2. Computes technical + valuation signals
-# 3. Evaluates material changes and sends alerts
+# 1. Ingests latest prices from EODHD (creates price snapshot)
+# 2. Computes daily features (EMA, EV/EBITDA) to wide features table
+# 3. Evaluates hardcoded templates and stores triggers
 on:
   schedule:
     # Run at 11 PM UTC daily (6 PM ET)
@@ -21,11 +21,20 @@ on:
         required: false
         type: boolean
         default: false
-      skip_metrics:
-        description: 'Skip metrics computation step'
+      skip_features:
+        description: 'Skip feature computation step'
         required: false
         type: boolean
         default: false
+      skip_templates:
+        description: 'Skip template evaluation step'
+        required: false
+        type: boolean
+        default: false
+      run_date:
+        description: 'Run date override (YYYY-MM-DD, defaults to today)'
+        required: false
+        default: ''
 
 jobs:
   daily-pipeline:
@@ -75,10 +84,10 @@ jobs:
           fi
 
       # ===================================================================
-      # STEP 2: Compute Technical + Valuation Metrics (Incremental)
+      # STEP 2: Compute Daily Features (EMA, EV/EBITDA) to Wide Table
       # ===================================================================
-      - name: 2. Compute technical and valuation metrics
-        if: ${{ !inputs.skip_metrics }}
+      - name: 2. Compute daily features
+        if: ${{ !inputs.skip_features }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -87,32 +96,31 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
           echo "======================================================================"
-          echo "STEP 2: Computing Technical + Valuation Metrics"
+          echo "STEP 2: Computing Daily Features"
           echo "======================================================================"
 
-          if [ -n "${{ github.event.inputs.tickers }}" ]; then
-            # Manual trigger with specific tickers
-            for ticker in ${{ github.event.inputs.tickers }}; do
-              echo "Computing metrics for $ticker..."
-              uv run python scripts/compute_metrics.py --ticker $ticker
-            done
-          else
-            # Scheduled run: Get watchlist tickers and compute incrementally
-            uv run python scripts/get_watchlist_tickers.py > /tmp/tickers.txt
-
-            for ticker in $(cat /tmp/tickers.txt); do
-              echo "Computing metrics for $ticker..."
-              uv run python scripts/compute_metrics.py --ticker $ticker || echo "Warning: Failed to compute metrics for $ticker"
-            done
+          # Determine run date
+          RUN_DATE="${{ github.event.inputs.run_date }}"
+          if [ -z "$RUN_DATE" ]; then
+            RUN_DATE=$(date +%Y-%m-%d)
           fi
 
+          # Build args
+          ARGS="--run-date $RUN_DATE"
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            ARGS="$ARGS --tickers ${{ github.event.inputs.tickers }}"
+          fi
+
+          echo "Running: python -m src.features.pipeline_daily $ARGS --skip-templates"
+          uv run python -m src.features.pipeline_daily $ARGS --skip-templates
+
       # ===================================================================
-      # STEP 3: Evaluate Signals and Send Alerts
+      # STEP 3: Evaluate Hardcoded Templates
       # ===================================================================
-      - name: 3. Evaluate signals and send alerts
+      - name: 3. Evaluate templates
+        if: ${{ !inputs.skip_templates }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -121,16 +129,19 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         run: |
           echo "======================================================================"
-          echo "STEP 3: Evaluating Signals and Sending Alerts"
+          echo "STEP 3: Evaluating Hardcoded Templates"
           echo "======================================================================"
-          uv run python -m src.signals.pipeline
+
+          # Determine run date
+          RUN_DATE="${{ github.event.inputs.run_date }}"
+          if [ -z "$RUN_DATE" ]; then
+            RUN_DATE=$(date +%Y-%m-%d)
+          fi
+
+          echo "Running: python -m src.features.pipeline_daily --run-date $RUN_DATE --skip-features"
+          uv run python -m src.features.pipeline_daily --run-date $RUN_DATE --skip-features
 
       # ===================================================================
       # Artifacts and Notifications
@@ -153,8 +164,8 @@ jobs:
           echo "======================================================================"
           echo "All steps completed:"
           echo "  ✓ Price data ingested"
-          echo "  ✓ Valuation metrics computed"
-          echo "  ✓ Signals evaluated and alerts sent"
+          echo "  ✓ Daily features computed (EMA, EV/EBITDA)"
+          echo "  ✓ Hardcoded templates evaluated"
 
       - name: Notify on failure
         if: failure()

@@ -1,0 +1,121 @@
+name: Weekly Valuation Stats
+
+# Weekly job to recompute valuation distribution stats per ticker
+# Runs Sunday 2am ET (7am UTC) to update percentiles for historical valuation templates
+on:
+  schedule:
+    # Run at 7 AM UTC on Sundays (2 AM ET)
+    - cron: '0 7 * * 0'
+
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      tickers:
+        description: 'Specific tickers to process (space-separated, leave empty for all active)'
+        required: false
+        default: ''
+      backfill:
+        description: 'Backfill from signals_valuation (for initial setup)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Dry run (do not write to Supabase)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  weekly-stats:
+    name: Compute Valuation Stats
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: prod-actions
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      # ===================================================================
+      # Compute Weekly Valuation Stats
+      # ===================================================================
+      - name: Compute valuation stats
+        env:
+          ENV: REMOTE
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: |
+          echo "======================================================================"
+          echo "WEEKLY VALUATION STATS COMPUTATION"
+          echo "======================================================================"
+
+          # Build args
+          ARGS=""
+
+          if [ -n "${{ github.event.inputs.tickers }}" ]; then
+            ARGS="$ARGS --tickers ${{ github.event.inputs.tickers }}"
+          fi
+
+          if [ "${{ github.event.inputs.backfill }}" == "true" ]; then
+            ARGS="$ARGS --backfill"
+          fi
+
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          echo "Running: python -m src.features.pipeline_weekly_stats $ARGS"
+          uv run python -m src.features.pipeline_weekly_stats $ARGS
+
+      # ===================================================================
+      # Artifacts and Notifications
+      # ===================================================================
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-stats-logs-${{ github.run_number }}
+          path: |
+            logs/*.log
+            *.log
+          retention-days: 7
+
+      - name: Report success
+        if: success()
+        run: |
+          echo "======================================================================"
+          echo "✅ Weekly Valuation Stats Completed Successfully"
+          echo "======================================================================"
+
+      - name: Notify on failure
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: '[ALERT] Weekly Valuation Stats Failed'
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: Material Changes Alerts <noreply@materialchanges.app>
+          body: |
+            The weekly valuation stats job failed.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            This may affect historical valuation templates. Investigate when convenient.
