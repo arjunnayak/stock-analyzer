@@ -6,9 +6,12 @@ Computes wide-row features for all active tickers:
 - Valuation metrics (EV/EBITDA)
 - Stores to R2 as date-partitioned parquet + latest.parquet
 - Upserts indicator_state for incremental computation
+
+For backfill operations, uses point-in-time fundamentals (merge_asof)
+to ensure historical EV/EBITDA reflects the fundamentals available at that time.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import numpy as np
@@ -389,10 +392,386 @@ class FeaturesComputer:
         print(f"  Created snapshot with {len(snapshot_df)} tickers: {key}")
         return key
 
+    # =========================================================================
+    # Backfill Methods - Use Point-in-Time Fundamentals
+    # =========================================================================
+
+    def backfill_features(
+        self,
+        start_date: date,
+        end_date: date,
+        tickers: Optional[list[str]] = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """
+        Backfill historical features with point-in-time fundamentals.
+
+        Unlike daily incremental computation, backfill:
+        - Uses merge_asof to get fundamentals valid at each price date
+        - Computes EMA sequentially from start_date
+        - Writes features for each date in the range
+
+        Args:
+            start_date: Start date for backfill
+            end_date: End date for backfill
+            tickers: Optional list of tickers (defaults to active tickers)
+            dry_run: If True, don't write to R2
+
+        Returns:
+            Summary dict with statistics
+        """
+        print(f"\n{'=' * 70}")
+        print(f"FEATURE BACKFILL - {start_date} to {end_date}")
+        print(f"{'=' * 70}\n")
+
+        # Get tickers
+        if tickers is None:
+            tickers = self.db.get_active_tickers()
+
+        if not tickers:
+            print("No tickers to process. Exiting.")
+            return {"status": "no_tickers", "tickers_processed": 0}
+
+        print(f"Tickers to backfill: {len(tickers)}")
+
+        # Load entity metadata
+        metadata_df = self.db.get_entity_metadata(tickers)
+
+        # Process each ticker
+        all_features = []
+        tickers_processed = 0
+        tickers_failed = 0
+
+        for ticker in tickers:
+            print(f"\nProcessing {ticker}...")
+
+            try:
+                ticker_features = self._backfill_ticker(
+                    ticker=ticker,
+                    start_date=start_date,
+                    end_date=end_date,
+                    metadata_df=metadata_df,
+                )
+
+                if ticker_features is not None and not ticker_features.empty:
+                    all_features.append(ticker_features)
+                    tickers_processed += 1
+                    print(f"  {len(ticker_features)} feature rows computed")
+                else:
+                    tickers_failed += 1
+                    print(f"  No features computed")
+
+            except Exception as e:
+                print(f"  Error: {e}")
+                tickers_failed += 1
+
+        if not all_features:
+            print("\nNo features computed. Exiting.")
+            return {
+                "status": "no_features",
+                "tickers_processed": 0,
+                "tickers_failed": tickers_failed,
+            }
+
+        # Combine all features
+        combined_df = pd.concat(all_features, ignore_index=True)
+
+        # Group by date and write
+        print(f"\nWriting {len(combined_df)} total feature rows...")
+
+        if not dry_run:
+            dates_written = self._write_features_by_date(combined_df)
+            print(f"Wrote features for {dates_written} dates")
+
+            # Update indicator_state with final state for each ticker
+            self._update_indicator_state_from_backfill(combined_df)
+        else:
+            print("[DRY RUN] Skipping writes")
+
+        return {
+            "status": "success" if not dry_run else "dry_run",
+            "tickers_processed": tickers_processed,
+            "tickers_failed": tickers_failed,
+            "total_rows": len(combined_df),
+            "date_range": f"{start_date} to {end_date}",
+        }
+
+    def _backfill_ticker(
+        self,
+        ticker: str,
+        start_date: date,
+        end_date: date,
+        metadata_df: pd.DataFrame,
+    ) -> Optional[pd.DataFrame]:
+        """
+        Backfill features for a single ticker with point-in-time fundamentals.
+
+        Args:
+            ticker: Ticker symbol
+            start_date: Start date
+            end_date: End date
+            metadata_df: Entity metadata
+
+        Returns:
+            DataFrame with features for all dates, or None if failed
+        """
+        # Load prices - need extra lookback for EMA warmup
+        warmup_start = start_date - timedelta(days=300)  # ~200 trading days
+        prices_df = self.reader.get_prices(ticker, warmup_start, end_date)
+
+        if prices_df.empty:
+            print(f"  No price data found")
+            return None
+
+        # Ensure date column is datetime
+        prices_df["date"] = pd.to_datetime(prices_df["date"])
+        prices_df = prices_df.sort_values("date").reset_index(drop=True)
+
+        # Load fundamentals - need extra lookback to cover first price dates
+        fund_start = warmup_start - timedelta(days=180)  # Extra buffer for quarterly data
+        fundamentals_df = self.reader.get_fundamentals(ticker, fund_start, end_date)
+
+        # Prepare fundamentals for point-in-time join
+        fund_pit = self._prepare_fundamentals_for_pit(fundamentals_df)
+
+        # Join fundamentals to prices using point-in-time logic
+        if fund_pit is not None and not fund_pit.empty:
+            prices_with_fund = pd.merge_asof(
+                prices_df.sort_values("date"),
+                fund_pit.sort_values("date"),
+                on="date",
+                direction="backward",  # Use most recent fundamental data before each price date
+            )
+        else:
+            print(f"  No fundamental data, EV/EBITDA will be null")
+            prices_with_fund = prices_df.copy()
+            for col in ["shares_outstanding", "total_debt", "cash_and_equivalents", "ebitda_ttm"]:
+                prices_with_fund[col] = None
+
+        # Compute EMAs incrementally
+        features = self._compute_ema_series(prices_with_fund)
+
+        # Compute EV/EBITDA for each row
+        features = self._compute_valuation_series(features)
+
+        # Add metadata
+        sector = None
+        if not metadata_df.empty:
+            ticker_meta = metadata_df[metadata_df["ticker"] == ticker]
+            if not ticker_meta.empty:
+                sector = ticker_meta.iloc[0].get("sector")
+
+        features["ticker"] = ticker
+        features["sector"] = sector
+
+        # Filter to requested date range (exclude warmup period)
+        features = features[features["date"].dt.date >= start_date]
+        features = features[features["date"].dt.date <= end_date]
+
+        # Add prev values
+        features["prev_close"] = features["close"].shift(1)
+        features["prev_ema_200"] = features["ema_200"].shift(1)
+        features["prev_ema_50"] = features["ema_50"].shift(1)
+
+        # Convert date back to date type
+        features["date"] = features["date"].dt.date
+
+        # Select and order columns
+        columns = [
+            "date", "ticker", "close", "volume",
+            "ema_200", "ema_50", "prev_close", "prev_ema_200", "prev_ema_50",
+            "ev_ebitda", "market_cap", "enterprise_value", "ebitda_ttm", "sector"
+        ]
+
+        return features[[c for c in columns if c in features.columns]]
+
+    def _prepare_fundamentals_for_pit(
+        self, fundamentals_df: pd.DataFrame
+    ) -> Optional[pd.DataFrame]:
+        """
+        Prepare fundamentals DataFrame for point-in-time merge.
+
+        Computes TTM values and extracts balance sheet items.
+
+        Args:
+            fundamentals_df: Raw quarterly fundamentals
+
+        Returns:
+            DataFrame with date, shares_outstanding, total_debt, cash, ebitda_ttm
+        """
+        if fundamentals_df.empty:
+            return None
+
+        df = fundamentals_df.copy()
+
+        # Normalize date column
+        if "period_end" in df.columns:
+            df = df.rename(columns={"period_end": "date"})
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+        # Filter to quarterly data if period column exists
+        if "period" in df.columns:
+            df = df[df["period"].str.contains("Quarter", na=False)]
+
+        if df.empty:
+            return None
+
+        # Map average_shares to shares_outstanding if needed
+        if "shares_outstanding" not in df.columns and "average_shares" in df.columns:
+            df["shares_outstanding"] = df["average_shares"]
+
+        # Get EBITDA (use income_before_depreciation if available)
+        if "income_before_depreciation" in df.columns:
+            df["ebitda_q"] = df["income_before_depreciation"]
+        else:
+            # Fallback: compute from components
+            df["ebitda_q"] = df.get("net_income", 0)
+            if "interest_expense" in df.columns:
+                df["ebitda_q"] = df["ebitda_q"] + df["interest_expense"].fillna(0)
+            if "income_taxes" in df.columns:
+                df["ebitda_q"] = df["ebitda_q"] + df["income_taxes"].fillna(0)
+            if "depreciation_and_amortization" in df.columns:
+                df["ebitda_q"] = df["ebitda_q"] + df["depreciation_and_amortization"].fillna(0)
+
+        # Compute TTM EBITDA (trailing 4 quarters)
+        df["ebitda_ttm"] = df["ebitda_q"].rolling(window=4, min_periods=4).sum()
+
+        # Get balance sheet items
+        total_debt = pd.Series(0, index=df.index)
+        if "long_term_debt" in df.columns:
+            total_debt = df["long_term_debt"].fillna(0)
+        if "current_portion_long_term_debt" in df.columns:
+            total_debt = total_debt + df["current_portion_long_term_debt"].fillna(0)
+        df["total_debt"] = total_debt
+
+        if "cash_and_equivalents" not in df.columns:
+            df["cash_and_equivalents"] = 0
+
+        # Select relevant columns
+        result_cols = ["date", "shares_outstanding", "total_debt", "cash_and_equivalents", "ebitda_ttm"]
+        result = df[[c for c in result_cols if c in df.columns]].copy()
+
+        return result
+
+    def _compute_ema_series(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute EMA series incrementally.
+
+        Args:
+            df: DataFrame with close prices, sorted by date
+
+        Returns:
+            DataFrame with ema_200 and ema_50 columns added
+        """
+        df = df.copy()
+
+        # Use pandas ewm for efficient EMA computation
+        df["ema_200"] = df["close"].ewm(span=200, adjust=False).mean()
+        df["ema_50"] = df["close"].ewm(span=50, adjust=False).mean()
+
+        return df
+
+    def _compute_valuation_series(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute EV/EBITDA for each row using point-in-time fundamentals.
+
+        Args:
+            df: DataFrame with close, shares_outstanding, total_debt, cash, ebitda_ttm
+
+        Returns:
+            DataFrame with ev_ebitda, market_cap, enterprise_value added
+        """
+        df = df.copy()
+
+        # Market cap
+        if "shares_outstanding" in df.columns:
+            df["market_cap"] = df["close"] * df["shares_outstanding"].fillna(0)
+        else:
+            df["market_cap"] = None
+
+        # Enterprise value = market_cap + total_debt - cash
+        df["enterprise_value"] = None
+        if "market_cap" in df.columns and "total_debt" in df.columns:
+            df["enterprise_value"] = (
+                df["market_cap"]
+                + df["total_debt"].fillna(0)
+                - df.get("cash_and_equivalents", pd.Series(0, index=df.index)).fillna(0)
+            )
+
+        # EV/EBITDA
+        df["ev_ebitda"] = None
+        if "enterprise_value" in df.columns and "ebitda_ttm" in df.columns:
+            valid_mask = (df["ebitda_ttm"] > 0) & df["enterprise_value"].notna()
+            df.loc[valid_mask, "ev_ebitda"] = (
+                df.loc[valid_mask, "enterprise_value"] / df.loc[valid_mask, "ebitda_ttm"]
+            )
+
+        return df
+
+    def _write_features_by_date(self, features_df: pd.DataFrame) -> int:
+        """
+        Write features grouped by date.
+
+        Args:
+            features_df: Combined features DataFrame
+
+        Returns:
+            Number of dates written
+        """
+        # Group by date
+        features_df["date"] = pd.to_datetime(features_df["date"])
+        grouped = features_df.groupby(features_df["date"].dt.date)
+
+        dates_written = 0
+        for run_date, group_df in grouped:
+            # Convert date column back to just date
+            group_df = group_df.copy()
+            group_df["date"] = run_date
+
+            self.r2.put_features(run_date, group_df)
+            dates_written += 1
+
+        # Also update latest.parquet with most recent date
+        latest_date = features_df["date"].max().date()
+        latest_df = features_df[features_df["date"].dt.date == latest_date].copy()
+        latest_df["date"] = latest_date
+        self.r2.put_features_latest(latest_df)
+
+        return dates_written
+
+    def _update_indicator_state_from_backfill(self, features_df: pd.DataFrame) -> None:
+        """
+        Update indicator_state with final values from backfill.
+
+        Args:
+            features_df: Features DataFrame from backfill
+        """
+        # Get final state for each ticker
+        features_df["date"] = pd.to_datetime(features_df["date"])
+        latest = features_df.loc[features_df.groupby("ticker")["date"].idxmax()]
+
+        updates = []
+        for _, row in latest.iterrows():
+            updates.append({
+                "ticker": row["ticker"],
+                "last_price_date": row["date"].date().isoformat() if hasattr(row["date"], "date") else str(row["date"]),
+                "last_close": row["close"],
+                "prev_close": row.get("prev_close"),
+                "prev_ema_200": row.get("prev_ema_200"),
+                "prev_ema_50": row.get("prev_ema_50"),
+                "ema_200": row["ema_200"],
+                "ema_50": row["ema_50"],
+            })
+
+        if updates:
+            count = self.db.upsert_indicator_state(updates)
+            print(f"Updated indicator_state for {count} tickers")
+
 
 if __name__ == "__main__":
     import argparse
-    from datetime import datetime
 
     parser = argparse.ArgumentParser(description="Compute daily features")
     parser.add_argument(
@@ -416,32 +795,59 @@ if __name__ == "__main__":
         action="store_true",
         help="Create price snapshot from individual ticker files",
     )
+    parser.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Run backfill mode with point-in-time fundamentals",
+    )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        help="Start date for backfill (YYYY-MM-DD). Required with --backfill.",
+    )
+    parser.add_argument(
+        "--end-date",
+        type=str,
+        help="End date for backfill (YYYY-MM-DD). Defaults to today.",
+    )
 
     args = parser.parse_args()
 
-    # Parse run date
-    if args.run_date:
-        run_date = date.fromisoformat(args.run_date)
-    else:
-        run_date = date.today()
+    # Parse dates
+    run_date = date.fromisoformat(args.run_date) if args.run_date else date.today()
+    end_date = date.fromisoformat(args.end_date) if args.end_date else date.today()
+    start_date = date.fromisoformat(args.start_date) if args.start_date else None
 
     with FeaturesComputer() as computer:
-        if args.create_snapshot:
+        if args.backfill:
+            # Backfill mode with point-in-time fundamentals
+            if not start_date:
+                print("Error: --start-date is required for backfill mode")
+                exit(1)
+
+            result = computer.backfill_features(
+                start_date=start_date,
+                end_date=end_date,
+                tickers=args.tickers,
+                dry_run=args.dry_run,
+            )
+        elif args.create_snapshot:
             # Just create the price snapshot
             tickers = args.tickers
             if not tickers:
                 tickers = computer.db.get_active_tickers()
             computer.create_price_snapshot_from_ingestion(run_date, tickers)
+            result = {"status": "snapshot_created"}
         else:
-            # Full feature computation
+            # Daily incremental feature computation
             result = computer.compute_daily_features(
                 run_date=run_date,
                 tickers=args.tickers,
                 dry_run=args.dry_run,
             )
 
-            print(f"\n{'=' * 70}")
-            print("SUMMARY")
-            print(f"{'=' * 70}")
-            for key, value in result.items():
-                print(f"  {key}: {value}")
+        print(f"\n{'=' * 70}")
+        print("SUMMARY")
+        print(f"{'=' * 70}")
+        for key, value in result.items():
+            print(f"  {key}: {value}")
