@@ -173,7 +173,10 @@ class DoltClient:
         end_date: Optional[date] = None,
     ) -> pd.DataFrame:
         """
-        Fetch fundamental data from Dolt earnings database (income_statement table).
+        Fetch fundamental data from Dolt earnings database.
+
+        Joins income_statement, balance_sheet_assets, balance_sheet_liabilities,
+        and balance_sheet_equity to get all fields needed for EV/EBITDA calculation.
 
         Args:
             ticker: Stock ticker (act_symbol)
@@ -181,42 +184,90 @@ class DoltClient:
             end_date: End date (optional)
 
         Returns:
-            DataFrame with fundamental data
+            DataFrame with fundamental data including balance sheet items
         """
+        # Join all relevant tables on date and period
         query = """
             SELECT
-                date as period_end,
-                period,
-                sales as revenue,
-                gross_profit,
-                income_after_depreciation_and_amortization as operating_income,
-                net_income,
-                diluted_net_eps,
-                average_shares,
-                pretax_income,
-                income_taxes,
-                depreciation_and_amortization,
-                cost_of_goods,
-                selling_administrative_depreciation_amortization_expenses,
-                income_from_continuing_operations
-            FROM income_statement
-            WHERE act_symbol = %s
+                inc.date as period_end,
+                inc.period,
+                inc.sales as revenue,
+                inc.gross_profit,
+                inc.income_after_depreciation as operating_income,
+                inc.net_income,
+                inc.diluted_net_eps,
+                inc.average_shares,
+                inc.pretax_income,
+                inc.income_taxes,
+                inc.interest_expense,
+                inc.depreciation_and_amortization,
+                inc.cost_of_goods,
+                inc.selling_administrative,
+                inc.income_from_continuing_operations,
+                -- Balance sheet assets
+                assets.cash_and_equivalents,
+                -- Balance sheet liabilities
+                liab.long_term_debt,
+                liab.current_portion_long_term_debt,
+                liab.total_liabilities,
+                -- Balance sheet equity
+                equity.shares_outstanding,
+                equity.total_equity,
+                equity.book_value_per_share
+            FROM income_statement inc
+            LEFT JOIN balance_sheet_assets assets
+                ON inc.act_symbol = assets.act_symbol
+                AND inc.date = assets.date
+                AND inc.period = assets.period
+            LEFT JOIN balance_sheet_liabilities liab
+                ON inc.act_symbol = liab.act_symbol
+                AND inc.date = liab.date
+                AND inc.period = liab.period
+            LEFT JOIN balance_sheet_equity equity
+                ON inc.act_symbol = equity.act_symbol
+                AND inc.date = equity.date
+                AND inc.period = equity.period
+            WHERE inc.act_symbol = %s
         """
         params = [ticker]
 
         if start_date:
-            query += " AND date >= %s"
+            query += " AND inc.date >= %s"
             params.append(start_date)
 
         if end_date:
-            query += " AND date <= %s"
+            query += " AND inc.date <= %s"
             params.append(end_date)
 
-        query += " ORDER BY date ASC"
+        query += " ORDER BY inc.date ASC"
 
         try:
             df = pd.read_sql(query, self.earnings_conn, params=params)
             df["period_end"] = pd.to_datetime(df["period_end"])
+
+            # Compute EBITDA if we have the components
+            # EBITDA = Operating Income + Depreciation & Amortization
+            # Or: EBITDA = Net Income + Interest + Taxes + D&A
+            if "depreciation_and_amortization" in df.columns:
+                if "operating_income" in df.columns:
+                    df["ebitda"] = (
+                        df["operating_income"].fillna(0)
+                        + df["depreciation_and_amortization"].fillna(0)
+                    )
+                elif all(col in df.columns for col in ["net_income", "interest_expense", "income_taxes"]):
+                    df["ebitda"] = (
+                        df["net_income"].fillna(0)
+                        + df["interest_expense"].fillna(0)
+                        + df["income_taxes"].fillna(0)
+                        + df["depreciation_and_amortization"].fillna(0)
+                    )
+
+            # Compute total_debt = long_term_debt + current_portion_long_term_debt
+            if "long_term_debt" in df.columns:
+                df["total_debt"] = df["long_term_debt"].fillna(0)
+                if "current_portion_long_term_debt" in df.columns:
+                    df["total_debt"] = df["total_debt"] + df["current_portion_long_term_debt"].fillna(0)
+
             return df
         except Exception as e:
             print(f"✗ Error fetching fundamentals for {ticker}: {e}")
@@ -317,6 +368,7 @@ class BackfillPipeline:
         ticker: str,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        fundamentals_df: Optional[pd.DataFrame] = None,
     ) -> dict:
         """
         Backfill fundamental data for a ticker.
@@ -325,14 +377,18 @@ class BackfillPipeline:
             ticker: Stock ticker
             start_date: Start date (optional)
             end_date: End date (optional)
+            fundamentals_df: Pre-fetched fundamentals data (optional, avoids refetch)
 
         Returns:
             Summary statistics
         """
         print(f"\nBackfilling fundamentals for {ticker}...")
 
-        # Fetch from Dolt
-        df = self.dolt.get_fundamentals(ticker, start_date, end_date)
+        # Use pre-fetched data or fetch from Dolt
+        if fundamentals_df is not None:
+            df = fundamentals_df
+        else:
+            df = self.dolt.get_fundamentals(ticker, start_date, end_date)
 
         if df.empty:
             print(f"  ⚠️  No fundamental data found")
@@ -374,6 +430,111 @@ class BackfillPipeline:
             "files": files_written,
             "status": "success",
         }
+
+    def update_fundamentals_latest(
+        self,
+        ticker: str,
+        fundamentals_df: pd.DataFrame,
+    ) -> bool:
+        """
+        Compute TTM values and update fundamentals_latest table.
+
+        Args:
+            ticker: Stock ticker
+            fundamentals_df: Fundamentals dataframe with quarterly data
+
+        Returns:
+            True if successful
+        """
+        if fundamentals_df.empty:
+            return False
+
+        # Sort by period_end desc to get most recent quarters
+        df = fundamentals_df.sort_values("period_end", ascending=False)
+
+        # Get the 4 most recent quarters for TTM calculation
+        recent_4q = df.head(4)
+
+        if len(recent_4q) < 4:
+            print(f"  ⚠️  Not enough quarters for TTM ({len(recent_4q)}/4)")
+            return False
+
+        # Compute TTM values (sum of last 4 quarters)
+        ebitda_ttm = None
+        if "ebitda" in df.columns:
+            ebitda_ttm = float(recent_4q["ebitda"].sum())
+        elif "depreciation_and_amortization" in df.columns and "operating_income" in df.columns:
+            ebitda_4q = (
+                recent_4q["operating_income"].fillna(0)
+                + recent_4q["depreciation_and_amortization"].fillna(0)
+            )
+            ebitda_ttm = float(ebitda_4q.sum())
+
+        revenue_ttm = None
+        if "revenue" in df.columns:
+            revenue_ttm = float(recent_4q["revenue"].fillna(0).sum())
+
+        # Get latest balance sheet values (most recent quarter only)
+        latest = df.iloc[0]
+
+        total_debt = None
+        if "total_debt" in df.columns:
+            total_debt = float(latest["total_debt"]) if pd.notna(latest["total_debt"]) else None
+        elif "long_term_debt" in df.columns:
+            total_debt = float(latest["long_term_debt"]) if pd.notna(latest["long_term_debt"]) else 0
+            if "current_portion_long_term_debt" in df.columns and pd.notna(
+                latest["current_portion_long_term_debt"]
+            ):
+                total_debt += float(latest["current_portion_long_term_debt"])
+
+        cash_and_equivalents = None
+        if "cash_and_equivalents" in df.columns and pd.notna(latest["cash_and_equivalents"]):
+            cash_and_equivalents = float(latest["cash_and_equivalents"])
+
+        shares_outstanding = None
+        if "shares_outstanding" in df.columns and pd.notna(latest["shares_outstanding"]):
+            shares_outstanding = float(latest["shares_outstanding"])
+        elif "average_shares" in df.columns and pd.notna(latest["average_shares"]):
+            shares_outstanding = float(latest["average_shares"])
+
+        # Compute net_debt
+        net_debt = None
+        if total_debt is not None:
+            net_debt = total_debt - (cash_and_equivalents or 0)
+
+        # Build the row for upsert
+        asof_date = latest["period_end"]
+        if hasattr(asof_date, "date"):
+            asof_date = asof_date.date()
+        elif isinstance(asof_date, str):
+            asof_date = datetime.strptime(asof_date, "%Y-%m-%d").date()
+
+        row = {
+            "ticker": ticker,
+            "asof_date": asof_date.isoformat(),
+            "ebitda_ttm": ebitda_ttm,
+            "revenue_ttm": revenue_ttm,
+            "net_debt": net_debt,
+            "shares_outstanding": shares_outstanding,
+            "total_debt": total_debt,
+            "cash_and_equivalents": cash_and_equivalents,
+        }
+
+        if self.dry_run:
+            print(f"  🏃 [DRY RUN] Would upsert fundamentals_latest: ebitda_ttm={ebitda_ttm}, shares={shares_outstanding}")
+            return True
+
+        # Upsert to Supabase
+        try:
+            from src.storage.supabase_db import SupabaseDB
+
+            db = SupabaseDB()
+            db.upsert_fundamentals_latest([row])
+            print(f"  ✓ Updated fundamentals_latest: ebitda_ttm={ebitda_ttm:.0f}" if ebitda_ttm else "  ✓ Updated fundamentals_latest")
+            return True
+        except Exception as e:
+            print(f"  ⚠️  Failed to update fundamentals_latest: {e}")
+            return False
 
 
 def load_tickers_from_file(file_path: str) -> list[str]:
@@ -491,8 +652,18 @@ def main():
 
         # Backfill fundamentals
         if not args.prices_only:
-            result = pipeline.backfill_fundamentals(ticker, start_date, end_date)
+            # Get fundamentals data
+            fundamentals_df = dolt_client.get_fundamentals(ticker, start_date, end_date)
+
+            # Backfill to R2 (pass pre-fetched data to avoid double fetch)
+            result = pipeline.backfill_fundamentals(
+                ticker, start_date, end_date, fundamentals_df=fundamentals_df
+            )
             results.append(result)
+
+            # Update fundamentals_latest table with TTM values
+            if result["status"] == "success" and not fundamentals_df.empty:
+                pipeline.update_fundamentals_latest(ticker, fundamentals_df)
 
     dolt_client.disconnect()
 
