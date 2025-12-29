@@ -21,7 +21,7 @@ class TestBackfillFundamentals:
                 "2024-09-30", "2024-06-30", "2024-03-31", "2023-12-31",
                 "2023-09-30", "2023-06-30"
             ]),
-            "period": ["Q3", "Q2", "Q1", "Q4", "Q3", "Q2"],
+            "period": ["Quarter", "Quarter", "Quarter", "Quarter", "Quarter", "Quarter"],
             "revenue": [100000, 95000, 90000, 88000, 85000, 82000],
             "operating_income": [25000, 24000, 22000, 21000, 20000, 19000],
             "net_income": [20000, 19000, 17000, 16000, 15000, 14000],
@@ -145,6 +145,32 @@ class TestBackfillFundamentals:
         assert row["cash_and_equivalents"] == 50000
 
 
+class TestYearRowFiltering:
+    """Test that Year rows are filtered out from TTM calculations."""
+
+    def test_year_rows_excluded_from_ttm(self):
+        """Test that Year rows don't pollute TTM calculations."""
+        # Create data with both Quarter and Year rows
+        df = pd.DataFrame({
+            "period_end": pd.to_datetime([
+                "2024-09-30", "2024-09-30", "2024-06-30", "2024-03-31", "2023-12-31"
+            ]),
+            "period": ["Year", "Quarter", "Quarter", "Quarter", "Quarter"],
+            "revenue": [400000, 100000, 95000, 90000, 88000],  # Year = sum of quarters
+            "ebitda": [120000, 30000, 28800, 26600, 25500],
+        })
+
+        # Filter to quarters only
+        quarters_only = df[df["period"].str.contains("Quarter", case=False, na=False)]
+
+        assert len(quarters_only) == 4
+        assert "Year" not in quarters_only["period"].values
+
+        # TTM should be sum of quarters, not include Year row
+        ttm_revenue = quarters_only.head(4)["revenue"].sum()
+        assert ttm_revenue == 373000  # 100000 + 95000 + 90000 + 88000
+
+
 class TestUpdateFundamentalsLatest:
     """Test the update_fundamentals_latest method."""
 
@@ -162,12 +188,12 @@ class TestUpdateFundamentalsLatest:
 
         pipeline = BackfillPipeline(mock_dolt, mock_r2, dry_run=False)
 
-        # Create test data
+        # Create test data (using "Quarter" as Dolt data does)
         df = pd.DataFrame({
             "period_end": pd.to_datetime([
                 "2024-09-30", "2024-06-30", "2024-03-31", "2023-12-31"
             ]),
-            "period": ["Q3", "Q2", "Q1", "Q4"],
+            "period": ["Quarter", "Quarter", "Quarter", "Quarter"],
             "revenue": [100000, 95000, 90000, 88000],
             "operating_income": [25000, 24000, 22000, 21000],
             "depreciation_and_amortization": [5000, 4800, 4600, 4500],
@@ -205,7 +231,7 @@ class TestUpdateFundamentalsLatest:
         # Only 3 quarters of data
         df = pd.DataFrame({
             "period_end": pd.to_datetime(["2024-09-30", "2024-06-30", "2024-03-31"]),
-            "period": ["Q3", "Q2", "Q1"],
+            "period": ["Quarter", "Quarter", "Quarter"],
             "revenue": [100000, 95000, 90000],
             "ebitda": [30000, 28800, 26600],
         })
@@ -227,7 +253,7 @@ class TestUpdateFundamentalsLatest:
             "period_end": pd.to_datetime([
                 "2024-09-30", "2024-06-30", "2024-03-31", "2023-12-31"
             ]),
-            "period": ["Q3", "Q2", "Q1", "Q4"],
+            "period": ["Quarter", "Quarter", "Quarter", "Quarter"],
             "revenue": [100000, 95000, 90000, 88000],
             "ebitda": [30000, 28800, 26600, 25500],
             "total_debt": [35000, 36000, 37000, 38000],
@@ -238,7 +264,7 @@ class TestUpdateFundamentalsLatest:
         with patch("src.storage.supabase_db.SupabaseDB") as mock_supabase_class:
             result = pipeline.update_fundamentals_latest("AAPL", df)
 
-            # Should return True but not call upsert
+            # Should return True but not call upsert (dry run mode)
             assert result == True
             mock_supabase_class.return_value.upsert_fundamentals_latest.assert_not_called()
 

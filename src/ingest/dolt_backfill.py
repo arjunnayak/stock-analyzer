@@ -322,11 +322,19 @@ class DoltBackfiller:
         if fundamentals_df.empty:
             return
 
+        # Filter to quarterly data only (exclude annual "Year" rows)
+        df = fundamentals_df.copy()
+        if 'period' in df.columns:
+            df = df[df['period'].str.contains('Quarter', case=False, na=False)]
+            if df.empty:
+                logger.warning(f"No quarterly data found after filtering for {ticker}")
+                return
+
         # Determine date column
-        date_col = 'period_end' if 'period_end' in fundamentals_df.columns else 'date'
+        date_col = 'period_end' if 'period_end' in df.columns else 'date'
 
         # Sort by date desc to get most recent quarters
-        df = fundamentals_df.sort_values(date_col, ascending=False)
+        df = df.sort_values(date_col, ascending=False)
 
         # Get the 4 most recent quarters for TTM calculation
         recent_4q = df.head(4)

@@ -449,8 +449,16 @@ class BackfillPipeline:
         if fundamentals_df.empty:
             return False
 
+        # Filter to quarterly data only (exclude annual "Year" rows)
+        df = fundamentals_df.copy()
+        if "period" in df.columns:
+            df = df[df["period"].str.contains("Quarter", case=False, na=False)]
+            if df.empty:
+                print(f"  ⚠️  No quarterly data found after filtering")
+                return False
+
         # Sort by period_end desc to get most recent quarters
-        df = fundamentals_df.sort_values("period_end", ascending=False)
+        df = df.sort_values("period_end", ascending=False)
 
         # Get the 4 most recent quarters for TTM calculation
         recent_4q = df.head(4)
