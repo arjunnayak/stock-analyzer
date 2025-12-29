@@ -26,10 +26,10 @@
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/r2/
 	 */
 	// Uncomment when ready to use:
-	// "r2_buckets": [
-	//   {
-	//     "binding": "BUCKET",
-	//     "bucket_name": "market-data"
-	//   }
-	// ]
+	"r2_buckets": [
+	  {
+	    "binding": "BUCKET",
+	    "bucket_name": "stock-analyzer"
+	  }
+	]
 }

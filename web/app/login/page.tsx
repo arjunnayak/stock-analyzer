@@ -2,15 +2,33 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { signInWithEmail } from '@/lib/supabase/auth'
+import { signInWithEmail, isDevAuthEnabled, devBypassSignIn } from '@/lib/supabase/auth'
+import { GoogleSignInButton } from '@/components/auth/GoogleSignInButton'
 import Link from 'next/link'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
   const [loading, setLoading] = useState(false)
+  const [devLoading, setDevLoading] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
   const router = useRouter()
+
+  const showDevBypass = isDevAuthEnabled()
+
+  const handleDevBypass = async () => {
+    setDevLoading(true)
+    setError('')
+
+    const { error } = await devBypassSignIn()
+
+    if (error) {
+      setError(error.message)
+      setDevLoading(false)
+    } else {
+      router.push('/dashboard')
+    }
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -61,6 +79,22 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-white flex items-center justify-center px-4">
       <div className="max-w-md w-full space-y-8">
+        {showDevBypass && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+            <div className="flex items-center gap-2 text-amber-800">
+              <span className="text-lg">⚠️</span>
+              <span className="font-semibold text-sm">DEV MODE</span>
+            </div>
+            <button
+              onClick={handleDevBypass}
+              disabled={devLoading || loading}
+              className="w-full px-4 py-2 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            >
+              {devLoading ? 'Signing in...' : 'Quick Login (Dev Only)'}
+            </button>
+          </div>
+        )}
+
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold">Welcome back</h1>
           <p className="text-gray-600">
@@ -98,6 +132,17 @@ export default function LoginPage() {
             {loading ? 'Sending link...' : 'Send magic link'}
           </button>
         </form>
+
+        <div className="relative my-6">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t border-gray-300" />
+          </div>
+          <div className="relative flex justify-center text-sm">
+            <span className="px-2 bg-white text-gray-500">Or continue with</span>
+          </div>
+        </div>
+
+        <GoogleSignInButton disabled={loading} />
 
         <div className="text-center">
           <p className="text-sm text-gray-600">

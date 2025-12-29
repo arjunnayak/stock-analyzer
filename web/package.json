@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "pages:build": "npx @cloudflare/next-on-pages",
+    "pages:deploy": "npm run pages:build && wrangler pages deploy .vercel/output/static --project-name=stock-analyzer",
+    "pages:preview": "wrangler pages dev .vercel/output/static"
   },
   "dependencies": {
     "react": "^19.0.0",
@@ -24,6 +27,9 @@
     "tailwindcss": "^3.4.1",
     "autoprefixer": "^10.4.20",
     "eslint": "^9",
-    "eslint-config-next": "^15.1.6"
+    "eslint-config-next": "^15.1.6",
+    "@cloudflare/next-on-pages": "^1",
+    "vercel": "^37.13.2",
+    "wrangler": "^4.54.0"
   }
 }
