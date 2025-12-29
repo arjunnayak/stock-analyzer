@@ -109,7 +109,7 @@ class R2Client:
         key: str,
         new_df: pd.DataFrame,
         dedupe_column: str = "date",
-    ) -> dict:
+    ) -> int:
         """
         Merge new data with existing data and write back.
 
@@ -126,7 +126,7 @@ class R2Client:
             dedupe_column: Column to deduplicate on (default: 'date')
 
         Returns:
-            S3 PutObject response
+            Number of rows in final merged file
         """
         # Get existing data if it exists
         existing_df = self.get_parquet(key)
@@ -136,14 +136,17 @@ class R2Client:
             merged_df = pd.concat([existing_df, new_df], ignore_index=True)
             merged_df = merged_df.drop_duplicates(subset=[dedupe_column], keep="last")
             merged_df = merged_df.sort_values(dedupe_column).reset_index(drop=True)
-            print(f"  Merged: {len(existing_df)} existing + {len(new_df)} new = {len(merged_df)} total")
+
+            rows_added = len(merged_df) - len(existing_df)
+            print(f"  Merged: {len(existing_df)} existing + {len(new_df)} fetched = {len(merged_df)} stored ({rows_added:+d} net change)")
         else:
             # No existing data, just sort new data
             merged_df = new_df.sort_values(dedupe_column).reset_index(drop=True)
             print(f"  New file: {len(merged_df)} rows")
 
         # Write back
-        return self.put_parquet(key, merged_df)
+        self.put_parquet(key, merged_df)
+        return len(merged_df)
 
     def get_timeseries(
         self,

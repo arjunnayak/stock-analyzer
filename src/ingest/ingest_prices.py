@@ -81,7 +81,8 @@ class PriceIngester:
         groups = df.groupby(["year", "month"])
 
         files_written = 0
-        total_rows = 0
+        rows_fetched = 0
+        rows_stored = 0
 
         for (year, month), group_df in groups:
             # Drop the year/month helper columns
@@ -96,15 +97,17 @@ class PriceIngester:
             )
 
             # Merge with existing data and write
-            self.r2.merge_and_put(key, data_df, dedupe_column="date")
+            merged_count = self.r2.merge_and_put(key, data_df, dedupe_column="date")
 
             files_written += 1
-            total_rows += len(data_df)
+            rows_fetched += len(data_df)
+            rows_stored += merged_count
 
         return {
             "ticker": ticker,
             "status": "success",
-            "rows": total_rows,
+            "rows_fetched": rows_fetched,
+            "rows_stored": rows_stored,
             "files": files_written,
         }
 
@@ -136,14 +139,16 @@ class PriceIngester:
         # Aggregate summary
         successful = sum(1 for r in results if r["status"] == "success")
         failed = sum(1 for r in results if r["status"] == "failed")
-        total_rows = sum(r["rows"] for r in results)
+        rows_fetched = sum(r.get("rows_fetched", r.get("rows", 0)) for r in results)
+        rows_stored = sum(r.get("rows_stored", r.get("rows", 0)) for r in results)
         total_files = sum(r["files"] for r in results)
 
         summary = {
             "total_tickers": len(tickers),
             "successful": successful,
             "failed": failed,
-            "total_rows": total_rows,
+            "rows_fetched": rows_fetched,
+            "rows_stored": rows_stored,
             "total_files": total_files,
             "results": results,
         }
@@ -176,13 +181,16 @@ def main():
     print(f"Total Tickers: {summary['total_tickers']}")
     print(f"Successful: {summary['successful']}")
     print(f"Failed: {summary['failed']}")
-    print(f"Total Rows: {summary['total_rows']:,}")
+    print(f"Rows Fetched from API: {summary['rows_fetched']:,}")
+    print(f"Rows Stored in R2: {summary['rows_stored']:,}")
     print(f"Total Files: {summary['total_files']}")
     print()
 
     for result in summary["results"]:
         status_icon = "✓" if result["status"] == "success" else "✗"
-        print(f"{status_icon} {result['ticker']}: {result['rows']:,} rows, {result['files']} files")
+        fetched = result.get('rows_fetched', result.get('rows', 0))
+        stored = result.get('rows_stored', result.get('rows', 0))
+        print(f"{status_icon} {result['ticker']}: {fetched} fetched → {stored} stored, {result['files']} files")
 
 
 if __name__ == "__main__":

@@ -175,13 +175,17 @@ Examples:
     print(f"Total Tickers: {summary['total_tickers']}")
     print(f"Successful: {summary['successful']}")
     print(f"Failed: {summary['failed']}")
-    print(f"Total Rows: {summary['total_rows']:,}")
+    print(f"Rows Fetched from API: {summary['rows_fetched']:,}")
+    print(f"Rows Stored in R2: {summary['rows_stored']:,}")
+    print(f"Net New Rows: {summary['rows_stored'] - summary.get('rows_existing', 0):+,}")
     print(f"Total Files: {summary['total_files']}")
     print()
 
     for result in summary["results"]:
         status_icon = "✓" if result["status"] == "success" else "✗"
-        print(f"{status_icon} {result['ticker']}: {result['rows']:,} rows, {result['files']} files")
+        fetched = result.get('rows_fetched', result.get('rows', 0))
+        stored = result.get('rows_stored', result.get('rows', 0))
+        print(f"{status_icon} {result['ticker']}: {fetched} fetched → {stored} stored, {result['files']} files")
 
     # Exit with error if any failed
     if summary["failed"] > 0:
