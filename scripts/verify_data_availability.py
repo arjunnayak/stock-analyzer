@@ -21,10 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.config import get_r2_client, get_supabase_client
 
 
-# Data types to check
+# Data types to check (based on storage-architecture.md)
 DATA_TYPES = {
-    'prices': ['prices_daily', 'prices_intraday'],
-    'fundamentals': ['fundamentals_income', 'fundamentals_balance', 'fundamentals_cash'],
+    'prices': ['prices'],
+    'fundamentals': ['fundamentals'],
     'signals': ['signals_technical', 'signals_valuation'],
 }
 
@@ -59,12 +59,13 @@ def check_r2_data_availability(r2_client, ticker: str, data_type: str) -> dict:
     Args:
         r2_client: R2 client instance
         ticker: Stock ticker symbol
-        data_type: Type of data (e.g., 'prices_daily', 'fundamentals_income')
+        data_type: Type of data (e.g., 'prices', 'fundamentals', 'signals_valuation')
 
     Returns:
         Dict with 'exists', 'file_count', 'latest_file', 'size_bytes'
     """
-    prefix = f"{data_type}/{ticker}/"
+    # Storage structure: {dataset}/v1/{ticker}/{year}/{month}/data.parquet
+    prefix = f"{data_type}/v1/{ticker}/"
 
     try:
         files = r2_client.list_objects(prefix=prefix)
