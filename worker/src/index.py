@@ -62,9 +62,11 @@ class Default(WorkerEntrypoint):
             return Response('', status=204, headers=CORS_HEADERS)
 
         try:
-            # Parse URL path
+            # Parse URL path (remove query string first)
             url = request.url
-            path = url.split('/', 3)[-1] if '/' in url else ''
+            # Split off query string
+            url_without_query = url.split('?')[0]
+            path = url_without_query.split('/', 3)[-1] if '/' in url_without_query else ''
             parts = path.strip('/').split('/')
 
             # Initialize async database client
@@ -211,9 +213,6 @@ class Default(WorkerEntrypoint):
         if not parts:
             return error_response('Invalid entities endpoint', 404)
 
-        # Debug logging
-        print(f"DEBUG: parts = {parts}, parts[0] = {parts[0] if parts else 'empty'}")
-
         # Parse query parameters from URL
         url_parts = request.url.split('?')
         query_params = {}
@@ -309,7 +308,7 @@ class Default(WorkerEntrypoint):
             if alert_type:
                 query = query.eq('alert_type', alert_type)
 
-            query = query.order('created_at', desc=True).limit(limit).offset(offset)
+            query = query.limit(limit).offset(offset)
 
             result = await query.execute()
             return json_response(result['data'])
