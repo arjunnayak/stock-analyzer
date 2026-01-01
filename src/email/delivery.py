@@ -11,9 +11,9 @@ from datetime import datetime
 from typing import Optional
 
 from src.config import config
+from src.email.alerts import Alert
 from src.email.sender import EmailSender
 from src.email.templates import EmailTemplates
-from src.signals.alerts import Alert
 
 
 @dataclass

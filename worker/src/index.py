@@ -1,7 +1,7 @@
 """
 Cloudflare Worker - Material Changes API
 
-Thin HTTP handlers that route requests to business logic services in src/services/
+Thin HTTP handlers with direct Supabase queries for watchlist, alerts, and user management.
 """
 
 from workers import Response, WorkerEntrypoint

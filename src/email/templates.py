@@ -6,7 +6,7 @@ Generates HTML and plain-text versions of alert emails.
 
 from typing import Optional
 
-from src.signals.alerts import Alert
+from src.email.alerts import Alert
 
 
 class EmailTemplates:
