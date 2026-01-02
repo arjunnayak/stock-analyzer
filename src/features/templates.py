@@ -346,6 +346,7 @@ class CheapVsHistory(Template):
             return {
                 "ev_ebit": round(row["ev_ebit"], 1),
                 "p20": round(row["ev_ebit_p20"], 1),
+                "close": round(row["close"], 2) if "close" in row else 0,
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -384,6 +385,7 @@ class ExpensiveVsHistory(Template):
             return {
                 "ev_ebit": round(row["ev_ebit"], 1),
                 "p80": round(row["ev_ebit_p80"], 1),
+                "close": round(row["close"], 2) if "close" in row else 0,
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -422,6 +424,7 @@ class ValueAtMedian(Template):
             return {
                 "ev_ebit": round(row["ev_ebit"], 1),
                 "p50_median": round(row["ev_ebit_p50"], 1),
+                "close": round(row["close"], 2) if "close" in row else 0,
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -467,6 +470,7 @@ class TrendUpValueCheap(Template):
                 "ema_200": round(row["ema_200"], 2),
                 "ev_ebit": round(row["ev_ebit"], 1),
                 "p20": round(row["ev_ebit_p20"], 1),
+                "close": round(row["close"], 2) if "close" in row else 0,
             }
 
         return self._build_result_df(triggered, "strength", reasons)

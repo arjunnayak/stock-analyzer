@@ -79,20 +79,18 @@ class TemplateAlertAdapter:
         },
         "T7": {
             "headline": "Historically cheap — valuation in bottom 20%",
-            "why_matters": """• EV/EBITDA in lowest quintile of 5-year range
+            "why_matters": """• EV/EBIT in lowest quintile of 5-year range
 • Market pricing in below-average expectations
 • Historical mean reversion suggests upside potential""",
             "what_didnt_change": """• Low valuation doesn't guarantee recovery
-• Business fundamentals may have deteriorated
 • Check if there are structural reasons for the discount""",
         },
         "T8": {
             "headline": "Historically expensive — valuation in top 20%",
-            "why_matters": """• EV/EBITDA in highest quintile of 5-year range
-• Market pricing in above-average growth/quality assumptions
+            "why_matters": """• EV/EBIT in highest quintile of 5-year range
+• Market pricing in above-average expectations
 • Leaves less room for disappointment""",
             "what_didnt_change": """• Great companies can justify premium valuations
-• High multiple doesn't mean sell, but increases risk
 • Consider if growth narrative is still intact""",
         },
         "T9": {
@@ -205,28 +203,20 @@ class TemplateAlertAdapter:
 • Extension above 200 EMA: {extension_pct:.1f}%"""
 
         elif template_id == "T7":  # Cheap vs history
-            return f"""• EV/EBIT entered bottom 20% of historical range
-• Current: {reasons.get('ev_ebit', 0):.1f}x
-• 20th percentile: {reasons.get('p20', 0):.1f}x
-• Trading at a 5-year valuation low"""
+            return f"""EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (below 20th percentile: {reasons.get('p20', 0):.1f}x)
+Price: ${reasons.get('close', 0):.2f}"""
 
         elif template_id == "T8":  # Expensive vs history
-            return f"""• EV/EBIT entered top 20% of historical range
-• Current: {reasons.get('ev_ebit', 0):.1f}x
-• 80th percentile: {reasons.get('p80', 0):.1f}x
-• Trading at a 5-year valuation high"""
+            return f"""EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (above 80th percentile: {reasons.get('p80', 0):.1f}x)
+Price: ${reasons.get('close', 0):.2f}"""
 
         elif template_id == "T9":  # Fair value
-            return f"""• EV/EBIT near historical median
-• Current: {reasons.get('ev_ebit', 0):.1f}x
-• Median (p50): {reasons.get('p50_median', 0):.1f}x
-• Variance: {reasons.get('variance_from_median_pct', 0):.1f}%"""
+            return f"""EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (median: {reasons.get('p50_median', 0):.1f}x)
+Price: ${reasons.get('close', 0):.2f}"""
 
         elif template_id == "T10":  # Uptrend + cheap
-            return f"""• Price in uptrend with attractive valuation
-• Price: ${reasons.get('close', 0):.2f} (above 200 EMA: ${reasons.get('ema_200', 0):.2f})
-• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (below p20: {reasons.get('p20', 0):.1f}x)
-• Technical strength + valuation support"""
+            return f"""EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (below p20: {reasons.get('p20', 0):.1f}x)
+Price: ${reasons.get('close', 0):.2f} (above EMA 200: ${reasons.get('ema_200', 0):.2f})"""
 
         else:
             # Generic fallback
@@ -246,11 +236,9 @@ class TemplateAlertAdapter:
 • Current: ${close:.2f}
 • Change: {pct_change:+.1f}%"""
 
-        elif template_id in ["T7", "T8"]:  # Valuation percentiles
-            cheap_or_expensive = "cheap" if template_id == "T7" else "expensive"
-            return f"""• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x
-• Historical percentile threshold crossed
-• Entered {cheap_or_expensive} zone"""
+        elif template_id in ["T7", "T8", "T9", "T10"]:  # Valuation templates - no before/after needed
+            # Skip redundant info - already shown in "what changed"
+            return ""
 
         elif template_id in ["T3", "T4"]:  # Pullback or extension
             return f"""• Current price: ${reasons.get('close', 0):.2f}
@@ -287,7 +275,7 @@ class AlertNotifier:
         dry_run: bool = False,
     ) -> dict:
         """
-        Send email alerts for today's template triggers.
+        Send ONE digest email per user with all their alerts for today.
 
         Args:
             run_date: Date of trigger evaluation
@@ -317,10 +305,10 @@ class AlertNotifier:
         total_pairs = sum(len(users) for users in watchlist_map.values())
         print(f"Loaded watchlists for {total_pairs} user-ticker pairs")
 
-        # 3. Process each trigger
-        emails_sent = 0
-        emails_skipped = 0
-        errors = []
+        # 3. Group alerts by user (for digest emails)
+        # user_alerts: {user_id: {"email": str, "alerts": [(alert_id, Alert, entity_id, template_id)]}}
+        user_alerts: dict[str, dict] = {}
+        alerts_skipped = 0
 
         for _, trigger_row in triggers_df.iterrows():
             ticker = trigger_row["ticker"]
@@ -337,79 +325,82 @@ class AlertNotifier:
                 entity_id = user_info["entity_id"]
                 user_email = user_info["email"]
 
-                try:
-                    # Check if we should alert this user (deduplication)
-                    if not self._should_send_alert(
-                        user_id, entity_id, template_id, run_date
-                    ):
-                        emails_skipped += 1
-                        if dry_run:
-                            print(
-                                f"  [SKIP] {ticker} {template_id} → {user_email} (already alerted recently)"
-                            )
-                        continue
+                # Check deduplication (skip if already alerted for this template recently)
+                if not self._should_send_alert(user_id, entity_id, template_id, run_date):
+                    alerts_skipped += 1
+                    continue
 
-                    # Convert trigger to Alert
-                    alert = TemplateAlertAdapter.to_alert(trigger_row.to_dict())
+                # Convert trigger to Alert
+                alert = TemplateAlertAdapter.to_alert(trigger_row.to_dict())
+                alert_id = str(uuid.uuid4())
 
-                    if dry_run:
-                        print(
-                            f"  [DRY RUN] Would send: {ticker} {template_id} → {user_email}"
-                        )
-                        emails_sent += 1
-                    else:
-                        # Send email
-                        alert_id = str(uuid.uuid4())
-                        result = self.email_service.send_alert_email(
-                            user_id=user_id,
-                            entity_id=entity_id,
-                            user_email=user_email,
-                            alert=alert,
-                            alert_id=alert_id,
-                        )
+                # Group by user
+                if user_id not in user_alerts:
+                    user_alerts[user_id] = {
+                        "email": user_email,
+                        "alerts": [],
+                    }
+                user_alerts[user_id]["alerts"].append((alert_id, alert, entity_id, template_id))
 
-                        if result.status == "sent":
-                            # Update state to prevent duplicates
-                            self._update_alert_state(
-                                user_id, entity_id, template_id, run_date
-                            )
-                            emails_sent += 1
-                            print(
-                                f"  ✓ Sent: {ticker} {template_id} → {user_email}"
-                            )
-                        else:
-                            errors.append(
-                                {
-                                    "ticker": ticker,
-                                    "template_id": template_id,
-                                    "user_email": user_email,
-                                    "error": result.error,
-                                }
-                            )
-                            print(
-                                f"  ✗ Failed: {ticker} {template_id} → {user_email}: {result.error}"
-                            )
+        # 4. Send ONE digest email per user
+        emails_sent = 0
+        errors = []
+        total_alerts_in_digests = sum(len(u["alerts"]) for u in user_alerts.values())
 
-                except Exception as e:
-                    errors.append(
-                        {
-                            "ticker": ticker,
-                            "template_id": template_id,
-                            "user_email": user_email,
-                            "error": str(e),
-                        }
-                    )
-                    print(
-                        f"  ✗ Error: {ticker} {template_id} → {user_email}: {e}"
-                    )
+        print(f"\nSending {len(user_alerts)} digest email(s) with {total_alerts_in_digests} total alerts...")
+
+        for user_id, user_data in user_alerts.items():
+            user_email = user_data["email"]
+            alerts_list = user_data["alerts"]
+
+            if not alerts_list:
+                continue
+
+            if dry_run:
+                alert_summaries = [f"{a[1].ticker} {a[3]}" for a in alerts_list]
+                print(f"  [DRY RUN] Would send digest to {user_email}: {', '.join(alert_summaries)}")
+                emails_sent += 1
+                continue
+
+            try:
+                # Send digest email
+                result = self.email_service.send_daily_digest(
+                    user_id=user_id,
+                    user_email=user_email,
+                    user_name=None,  # Could fetch from users table if needed
+                    alerts=[(aid, alert) for aid, alert, _, _ in alerts_list],
+                )
+
+                if result.status == "sent":
+                    emails_sent += 1
+                    # Update alert state for all alerts in this digest
+                    for _, alert, entity_id, template_id in alerts_list:
+                        self._update_alert_state(user_id, entity_id, template_id, run_date)
+                    print(f"  ✓ Digest sent to {user_email} ({len(alerts_list)} alerts)")
+                else:
+                    errors.append({
+                        "user_email": user_email,
+                        "error": result.error,
+                        "alert_count": len(alerts_list),
+                    })
+                    print(f"  ✗ Failed digest to {user_email}: {result.error}")
+
+            except Exception as e:
+                errors.append({
+                    "user_email": user_email,
+                    "error": str(e),
+                    "alert_count": len(alerts_list),
+                })
+                print(f"  ✗ Error sending digest to {user_email}: {e}")
 
         return {
             "status": "success",
             "triggers_processed": len(triggers_df),
             "emails_sent": emails_sent,
-            "emails_skipped": emails_skipped,
+            "alerts_in_digests": total_alerts_in_digests,
+            "alerts_skipped": alerts_skipped,
             "errors_count": len(errors),
-            "errors": errors[:10],  # First 10 errors for debugging
+            "errors": errors[:10],
         }
 
     def _get_user_watchlist_map(self) -> dict[str, list[dict]]:

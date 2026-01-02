@@ -125,9 +125,12 @@ class EmailDeliveryService:
         Returns:
             DeliveryResult object
         """
+        # Generate a UUID for the digest
+        digest_id = str(uuid.uuid4())
+
         if not alerts:
             return DeliveryResult(
-                alert_id="digest",
+                alert_id=digest_id,
                 user_id=user_id,
                 entity_id="",
                 ticker="",
@@ -156,7 +159,7 @@ class EmailDeliveryService:
 
         # Log delivery
         delivery_result = DeliveryResult(
-            alert_id="digest",
+            alert_id=digest_id,
             user_id=user_id,
             entity_id="",
             ticker=f"{len(alerts)} stocks",
@@ -225,7 +228,7 @@ class EmailDeliveryService:
                 "id": str(uuid.uuid4()),
                 "alert_id": result.alert_id,
                 "user_id": result.user_id,
-                "entity_id": result.entity_id,
+                "entity_id": result.entity_id if result.entity_id else None,  # NULL for digest
                 "to_email": result.to_email,
                 "status": result.status,
                 "message_id": result.message_id,

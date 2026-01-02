@@ -168,34 +168,45 @@ class EmailSender:
 
         subject = f"[Material Changes] {count} alert{'s' if count > 1 else ''} — {tickers}"
 
-        # Build digest body
+        # Build digest body, grouped by ticker
         greeting = f"Hi {user_name}" if user_name else "Hi"
+
+        # Group alerts by ticker
+        from collections import OrderedDict
+        ticker_groups: dict[str, list[dict]] = OrderedDict()
+        for alert in alerts:
+            ticker = alert["ticker"]
+            if ticker not in ticker_groups:
+                ticker_groups[ticker] = []
+            ticker_groups[ticker].append(alert)
 
         plain_parts = [
             greeting,
             "",
-            f"You have {count} material change alert{'s' if count > 1 else ''} today:",
+            f"You have {count} alert{'s' if count > 1 else ''} across {len(ticker_groups)} stock{'s' if len(ticker_groups) > 1 else ''} today:",
             "",
-            "=" * 70,
         ]
 
-        for i, alert in enumerate(alerts, 1):
-            plain_parts.append(f"\n{i}. {alert['ticker']} — {alert['headline']}\n")
-            plain_parts.append(alert["plain_body"])
-            plain_parts.append("\n" + "=" * 70)
+        for ticker, ticker_alerts in ticker_groups.items():
+            plain_parts.append("=" * 50)
+            plain_parts.append(f"  {ticker}")
+            plain_parts.append("=" * 50)
+            for alert in ticker_alerts:
+                plain_parts.append(f"\n• {alert['headline']}")
+                plain_parts.append(alert["plain_body"])
+            plain_parts.append("")
 
         plain_parts.extend([
-            "",
             "---",
-            "Material Changes - Monitor stocks without re-researching",
+            "Stock Analyzer - Monitor stocks without re-researching",
             "Manage your watchlist: https://materialchanges.app/watchlist",
             "Pause alerts: https://materialchanges.app/settings",
         ])
 
         plain_body = "\n".join(plain_parts)
 
-        # Simple HTML version (can be enhanced later)
-        html_body = plain_body.replace("\n", "<br>")
+        # Build proper HTML digest
+        html_body = self._build_digest_html(alerts, greeting, count)
 
         # Create message
         msg = MIMEMultipart("alternative")
@@ -295,6 +306,83 @@ Monitor stocks without re-researching
                 "to": to_email,
                 "error": str(e),
             }
+
+    def _build_digest_html(self, alerts: list[dict], greeting: str, count: int) -> str:
+        """Build nicely formatted HTML for digest email, grouped by ticker."""
+        # Group alerts by ticker
+        from collections import OrderedDict
+        ticker_groups: dict[str, list[dict]] = OrderedDict()
+        for alert in alerts:
+            ticker = alert["ticker"]
+            if ticker not in ticker_groups:
+                ticker_groups[ticker] = []
+            ticker_groups[ticker].append(alert)
+
+        # Build ticker sections
+        ticker_sections = ""
+        for ticker, ticker_alerts in ticker_groups.items():
+            # Build alert items for this ticker
+            alert_items = ""
+            for alert in ticker_alerts:
+                body = alert["plain_body"]
+                alert_items += f"""
+                <div style="margin-bottom: 16px; padding-left: 16px; border-left: 3px solid #e5e7eb;">
+                    <div style="font-size: 15px; font-weight: 600; color: #374151; margin-bottom: 6px;">
+                        {alert['headline']}
+                    </div>
+                    <div style="font-size: 14px; color: #4b5563; white-space: pre-line; line-height: 1.5;">
+                        {body}
+                    </div>
+                </div>
+                """
+
+            ticker_sections += f"""
+            <div style="background: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                <div style="font-size: 20px; font-weight: 700; color: #1f2937; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 2px solid #2563eb;">
+                    {ticker}
+                </div>
+                {alert_items}
+            </div>
+            """
+
+        html = f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily Digest - {count} Alerts</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #1f2937; background-color: #f3f4f6; margin: 0; padding: 0;">
+    <div style="max-width: 600px; margin: 0 auto; background: white;">
+        <!-- Header -->
+        <div style="background: #2563eb; color: white; padding: 32px 24px; text-align: center;">
+            <h1 style="margin: 0; font-size: 24px; font-weight: 600;">Daily Stock Alerts</h1>
+            <p style="margin: 8px 0 0 0; opacity: 0.9;">{count} material change{'s' if count > 1 else ''} detected</p>
+        </div>
+
+        <!-- Content -->
+        <div style="padding: 24px;">
+            <p style="color: #374151; margin-bottom: 24px;">{greeting}, here are your stock alerts for today:</p>
+
+            {ticker_sections}
+        </div>
+
+        <!-- Footer -->
+        <div style="background: #f9fafb; padding: 24px; text-align: center; border-top: 1px solid #e5e7eb;">
+            <p style="margin: 0 0 8px 0; font-weight: 600; color: #1f2937;">Stock Analyzer</p>
+            <p style="margin: 0; font-size: 13px; color: #6b7280;">Monitor stocks without re-researching</p>
+            <div style="margin-top: 16px; font-size: 13px;">
+                <a href="https://materialchanges.app/watchlist" style="color: #2563eb; text-decoration: none;">Manage Watchlist</a>
+                <span style="color: #d1d5db; margin: 0 8px;">•</span>
+                <a href="https://materialchanges.app/settings" style="color: #2563eb; text-decoration: none;">Pause Alerts</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+        return html
 
     def _generate_message_id(self, alert_id: Optional[str] = None) -> str:
         """Generate a unique Message-ID for email tracking."""

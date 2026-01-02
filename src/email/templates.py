@@ -31,29 +31,13 @@ class EmailTemplates:
             Plain text email body
         """
         lines = [
-            f"[{alert.ticker}] — {alert.headline}",
-            "",
-            "What changed:",
             alert.what_changed,
-            "",
-            "Why it matters:",
-            alert.why_it_matters,
-            "",
-            "Before vs now:",
-            alert.before_vs_now,
-            "",
-            "What didn't change:",
-            alert.what_didnt_change,
-            "",
-            "---",
-            f"Detected: {alert.timestamp.strftime('%Y-%m-%d at %I:%M %p ET')}",
-            "",
-            "---",
-            "Material Changes - Monitor stocks without re-researching",
-            f"View {alert.ticker}: https://materialchanges.app/stock/{alert.ticker}",
-            "Manage watchlist: https://materialchanges.app/watchlist",
-            "Pause alerts: https://materialchanges.app/settings",
         ]
+
+        # Only include sections that have content
+        if alert.before_vs_now and alert.before_vs_now.strip():
+            lines.append("")
+            lines.append(alert.before_vs_now)
 
         return "\n".join(lines)
 
