@@ -193,39 +193,39 @@ class TemplateAlertAdapter:
 
         elif template_id == "T5":  # Value + momentum
             return f"""• Stock combines cheap valuation with bullish trend
-• EV/EBITDA: {reasons.get('ev_ebitda', 0):.1f}x (threshold: ≤10x)
+• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (threshold: ≤12x)
 • Price: ${reasons.get('close', 0):.2f} (above 200 EMA: ${reasons.get('ema_200', 0):.2f})
 • Dual confirmation: technical + fundamental"""
 
         elif template_id == "T6":  # Expensive + extended
             extension_pct = reasons.get("extension_pct", 0)
             return f"""• High valuation combined with price extension
-• EV/EBITDA: {reasons.get('ev_ebitda', 0):.1f}x (threshold: >25x)
+• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (threshold: ≥30x)
 • Price: ${reasons.get('close', 0):.2f}
 • Extension above 200 EMA: {extension_pct:.1f}%"""
 
         elif template_id == "T7":  # Cheap vs history
-            return f"""• EV/EBITDA entered bottom 20% of historical range
-• Current: {reasons.get('ev_ebitda', 0):.1f}x
-• 20th percentile: {reasons.get('ev_ebitda_p20', 0):.1f}x
+            return f"""• EV/EBIT entered bottom 20% of historical range
+• Current: {reasons.get('ev_ebit', 0):.1f}x
+• 20th percentile: {reasons.get('p20', 0):.1f}x
 • Trading at a 5-year valuation low"""
 
         elif template_id == "T8":  # Expensive vs history
-            return f"""• EV/EBITDA entered top 20% of historical range
-• Current: {reasons.get('ev_ebitda', 0):.1f}x
-• 80th percentile: {reasons.get('ev_ebitda_p80', 0):.1f}x
+            return f"""• EV/EBIT entered top 20% of historical range
+• Current: {reasons.get('ev_ebit', 0):.1f}x
+• 80th percentile: {reasons.get('p80', 0):.1f}x
 • Trading at a 5-year valuation high"""
 
         elif template_id == "T9":  # Fair value
-            return f"""• EV/EBITDA near historical median
-• Current: {reasons.get('ev_ebitda', 0):.1f}x
-• Median (p50): {reasons.get('ev_ebitda_p50', 0):.1f}x
+            return f"""• EV/EBIT near historical median
+• Current: {reasons.get('ev_ebit', 0):.1f}x
+• Median (p50): {reasons.get('p50_median', 0):.1f}x
 • Variance: {reasons.get('variance_from_median_pct', 0):.1f}%"""
 
         elif template_id == "T10":  # Uptrend + cheap
             return f"""• Price in uptrend with attractive valuation
 • Price: ${reasons.get('close', 0):.2f} (above 200 EMA: ${reasons.get('ema_200', 0):.2f})
-• EV/EBITDA: {reasons.get('ev_ebitda', 0):.1f}x (below p20: {reasons.get('ev_ebitda_p20', 0):.1f}x)
+• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x (below p20: {reasons.get('p20', 0):.1f}x)
 • Technical strength + valuation support"""
 
         else:
@@ -248,7 +248,7 @@ class TemplateAlertAdapter:
 
         elif template_id in ["T7", "T8"]:  # Valuation percentiles
             cheap_or_expensive = "cheap" if template_id == "T7" else "expensive"
-            return f"""• EV/EBITDA: {reasons.get('ev_ebitda', 0):.1f}x
+            return f"""• EV/EBIT: {reasons.get('ev_ebit', 0):.1f}x
 • Historical percentile threshold crossed
 • Entered {cheap_or_expensive} zone"""
 
@@ -260,10 +260,10 @@ class TemplateAlertAdapter:
         else:
             # Generic
             close = reasons.get("close", 0)
-            ev_ebitda = reasons.get("ev_ebitda")
+            ev_ebit = reasons.get("ev_ebit")
             parts = [f"• Current price: ${close:.2f}"]
-            if ev_ebitda:
-                parts.append(f"• EV/EBITDA: {ev_ebitda:.1f}x")
+            if ev_ebit:
+                parts.append(f"• EV/EBIT: {ev_ebit:.1f}x")
             return "\n".join(parts)
 
 
@@ -529,11 +529,12 @@ class AlertNotifier:
         # Update template alert date
         last_alerted[template_id] = run_date.isoformat()
 
-        # Upsert state
+        # Upsert state (use on_conflict to handle existing rows)
         self.db.client.table("user_entity_settings").upsert(
             {
                 "user_id": user_id,
                 "entity_id": entity_id,
                 "last_alerted_templates": last_alerted,
-            }
+            },
+            on_conflict="user_id,entity_id",
         ).execute()
