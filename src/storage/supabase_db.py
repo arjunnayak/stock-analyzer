@@ -58,6 +58,7 @@ class FundamentalsLatest:
     ticker: str
     asof_date: date
     ebitda_ttm: Optional[float] = None
+    operating_income_ttm: Optional[float] = None  # EBIT - available quarterly
     revenue_ttm: Optional[float] = None
     net_debt: Optional[float] = None
     shares_outstanding: Optional[float] = None
@@ -73,6 +74,7 @@ class FundamentalsLatest:
             if data.get("asof_date")
             else None,
             ebitda_ttm=data.get("ebitda_ttm"),
+            operating_income_ttm=data.get("operating_income_ttm"),
             revenue_ttm=data.get("revenue_ttm"),
             net_debt=data.get("net_debt"),
             shares_outstanding=data.get("shares_outstanding"),
@@ -226,6 +228,35 @@ class SupabaseDB:
         return {
             row["ticker"]: FundamentalsLatest.from_dict(row) for row in response.data
         }
+
+    def get_fundamentals_latest_date(self, tickers: list[str]) -> Optional[date]:
+        """
+        Get the most recent asof_date from fundamentals_latest for any ticker.
+
+        Args:
+            tickers: List of ticker symbols to check
+
+        Returns:
+            Most recent asof_date, or None if no fundamentals exist
+        """
+        if not tickers:
+            return None
+
+        response = (
+            self.client.table("fundamentals_latest")
+            .select("asof_date")
+            .in_("ticker", tickers)
+            .not_.is_("asof_date", "null")
+            .order("asof_date", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if response.data:
+            asof_str = response.data[0]["asof_date"]
+            return date.fromisoformat(asof_str) if asof_str else None
+
+        return None
 
     def upsert_fundamentals_latest(
         self, rows: list[dict], batch_size: int = 500

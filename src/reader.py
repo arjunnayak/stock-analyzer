@@ -19,6 +19,48 @@ class TimeSeriesReader:
         """Initialize reader with R2 client."""
         self.r2 = R2Client()
 
+    def get_latest_price_date(
+        self, tickers: list[str], lookback_days: int = 7
+    ) -> Optional[date]:
+        """
+        Find the most recent date with price data for any ticker.
+
+        Checks individual ticker price files (from ingestion).
+
+        Args:
+            tickers: List of tickers to check
+            lookback_days: Number of days to look back (default: 7)
+
+        Returns:
+            Most recent date with price data, or None if not found
+        """
+        if not tickers:
+            return None
+
+        end_date = date.today()
+        start_date = end_date - timedelta(days=lookback_days)
+
+        # Sample a few tickers to find the latest date
+        sample_tickers = tickers[:5] if len(tickers) > 5 else tickers
+        latest_date = None
+
+        for ticker in sample_tickers:
+            try:
+                df = self.get_prices(ticker, start_date, end_date)
+                if not df.empty:
+                    ticker_latest = df["date"].max()
+                    if isinstance(ticker_latest, pd.Timestamp):
+                        ticker_latest = ticker_latest.date()
+                    elif isinstance(ticker_latest, str):
+                        ticker_latest = date.fromisoformat(ticker_latest)
+
+                    if latest_date is None or ticker_latest > latest_date:
+                        latest_date = ticker_latest
+            except Exception:
+                continue
+
+        return latest_date
+
     def get_prices(
         self,
         ticker: str,

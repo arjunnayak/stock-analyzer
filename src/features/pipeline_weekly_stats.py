@@ -79,44 +79,100 @@ class WeeklyStatsPipeline:
         print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 70)
 
+        # =====================================================================
+        # Step 0: Data Availability Validation
+        # =====================================================================
+        print("\n" + "=" * 70)
+        print("STEP 0: DATA AVAILABILITY VALIDATION")
+        print("=" * 70)
+
         # Get active tickers
         if tickers is None:
             tickers = self.db.get_active_tickers()
 
         if not tickers:
-            print("No active tickers found. Exiting.")
+            print("✗ No active tickers found")
             return {
-                "status": "no_tickers",
+                "status": "failed_validation",
+                "error": "no_active_tickers",
                 "tickers_processed": 0,
             }
 
-        print(f"\nActive tickers: {len(tickers)}")
+        print(f"✓ Active tickers: {len(tickers)}")
+
+        # Check if we have any historical features
+        print("\nChecking for historical features in R2...")
+        # Use a high limit to ensure we get all available dates, not just old ones
+        available_dates = self.r2.list_feature_dates(limit=5000)
+
+        if not available_dates:
+            print("✗ No historical features found in R2")
+            print("\n  The weekly stats pipeline requires historical features.")
+            print("  You need to build up feature history first by running the daily pipeline.")
+            print("\n  To backfill historical features, run:")
+            print("    # For the last 6 months (~120 trading days)")
+            print("    ENV=REMOTE python scripts/backfill_features_historical.py --days 120")
+            print("\n  Or manually run daily pipeline for each historical date:")
+            print("    ENV=REMOTE python -m src.features.pipeline_daily --run-date YYYY-MM-DD")
+            return {
+                "status": "failed_validation",
+                "error": "no_historical_features",
+                "tickers_processed": 0,
+            }
+
+        # Check if we have enough history
+        num_available = len(available_dates)
+        oldest_date = min(available_dates)
+        newest_date = max(available_dates)
+        days_of_history = (newest_date - oldest_date).days
+
+        print(f"✓ Found {num_available} dates of feature history")
+        print(f"  Date range: {oldest_date} to {newest_date} ({days_of_history} calendar days)")
+
+        if num_available < min_data_points:
+            print(f"\n⚠️  Warning: Only {num_available} feature dates available")
+            print(f"  Recommended: {min_data_points}+ dates for reliable stats")
+            print(f"  Some tickers may have insufficient data and will be skipped")
+
+        # Recommend window adjustment if needed
+        if num_available < window_days:
+            recommended_window = num_available - 10
+            print(f"\n⚠️  Warning: Requested window ({window_days} days) exceeds available data ({num_available} days)")
+            print(f"  Recommendation: Use --window-days {recommended_window}")
+
+        print("\n" + "=" * 70)
         print(f"Window: {window_days} trading days (~{window_days // 252} years)")
         print(f"Min data points: {min_data_points}")
+        print("=" * 70)
 
-        # Load historical features
-        print("\nLoading historical features from R2...")
-        features_df = self._load_historical_features(window_days)
+        # Compute valuation data directly from prices and fundamentals
+        # This is more reliable than using pre-computed features which may have missing data
+        print("\nComputing valuation metrics from prices and fundamentals...")
+
+        # Calculate date range based on window
+        end_date = date.today()
+        # Approximate calendar days for trading days (252 trading days per year)
+        calendar_days = int(window_days * 365 / 252) + 30  # Add buffer
+        start_date = end_date - timedelta(days=calendar_days)
+
+        features_df = self._compute_valuation_from_fundamentals(tickers, start_date, end_date)
 
         if features_df.empty:
-            print("No historical features available. Exiting.")
+            print("No valuation data could be computed. Exiting.")
             return {
                 "status": "no_features",
                 "tickers_processed": 0,
             }
 
-        print(f"Loaded {len(features_df)} feature rows")
+        print(f"Computed {len(features_df)} valuation rows")
         print(f"Date range: {features_df['date'].min()} to {features_df['date'].max()}")
         print(f"Unique tickers in data: {features_df['ticker'].nunique()}")
-
-        # Filter to active tickers
-        features_df = features_df[features_df["ticker"].isin(tickers)]
-        print(f"After filtering to active tickers: {len(features_df)} rows")
 
         # Compute stats per ticker
         print("\nComputing valuation stats per ticker...")
         stats_rows = []
-        tickers_with_stats = 0
+        tickers_with_ev_ebit = 0
+        tickers_with_ev_ebitda = 0
         tickers_insufficient = 0
 
         for ticker in tickers:
@@ -126,38 +182,51 @@ class WeeklyStatsPipeline:
                 tickers_insufficient += 1
                 continue
 
-            # Get EV/EBITDA values
-            ev_ebitda = ticker_df["ev_ebitda"].dropna()
-
-            if len(ev_ebitda) < min_data_points:
-                tickers_insufficient += 1
-                continue
-
-            # Filter to positive values only
-            ev_ebitda = ev_ebitda[ev_ebitda > 0]
-
-            if len(ev_ebitda) < min_data_points:
-                tickers_insufficient += 1
-                continue
-
-            # Compute stats
-            stats = self._compute_stats(ev_ebitda)
-            stats["ticker"] = ticker
-            stats["metric"] = "ev_ebitda"
-            stats["window_days"] = window_days
-            stats["asof_date"] = ticker_df["date"].max()
-
+            asof_date = ticker_df["date"].max()
             # Convert date to string for Supabase
-            if hasattr(stats["asof_date"], "isoformat"):
-                stats["asof_date"] = stats["asof_date"].isoformat()
-            elif hasattr(stats["asof_date"], "strftime"):
-                stats["asof_date"] = stats["asof_date"].strftime("%Y-%m-%d")
+            if hasattr(asof_date, "isoformat"):
+                asof_date_str = asof_date.isoformat()
+            elif hasattr(asof_date, "strftime"):
+                asof_date_str = asof_date.strftime("%Y-%m-%d")
+            else:
+                asof_date_str = str(asof_date)
 
-            stats_rows.append(stats)
-            tickers_with_stats += 1
+            # Get EV/EBIT values (preferred - quarterly granularity)
+            if "ev_ebit" in ticker_df.columns:
+                ev_ebit = ticker_df["ev_ebit"].dropna()
+                ev_ebit = ev_ebit[ev_ebit > 0]
 
-        print(f"\nStats computed for {tickers_with_stats} tickers")
-        print(f"Insufficient data for {tickers_insufficient} tickers")
+                if len(ev_ebit) >= min_data_points:
+                    stats = self._compute_stats(ev_ebit)
+                    stats["ticker"] = ticker
+                    stats["metric"] = "ev_ebit"
+                    stats["window_days"] = window_days
+                    stats["asof_date"] = asof_date_str
+                    stats_rows.append(stats)
+                    tickers_with_ev_ebit += 1
+
+            # Get EV/EBITDA values (fallback - yearly D&A only)
+            if "ev_ebitda" in ticker_df.columns:
+                ev_ebitda = ticker_df["ev_ebitda"].dropna()
+                ev_ebitda = ev_ebitda[ev_ebitda > 0]
+
+                if len(ev_ebitda) >= min_data_points:
+                    stats = self._compute_stats(ev_ebitda)
+                    stats["ticker"] = ticker
+                    stats["metric"] = "ev_ebitda"
+                    stats["window_days"] = window_days
+                    stats["asof_date"] = asof_date_str
+                    stats_rows.append(stats)
+                    tickers_with_ev_ebitda += 1
+
+            # Count as insufficient only if neither metric has enough data
+            if ticker not in [s["ticker"] for s in stats_rows]:
+                tickers_insufficient += 1
+
+        print(f"\nStats computed:")
+        print(f"  - EV/EBIT: {tickers_with_ev_ebit} tickers")
+        print(f"  - EV/EBITDA: {tickers_with_ev_ebitda} tickers")
+        print(f"  - Insufficient data: {tickers_insufficient} tickers")
 
         if not stats_rows:
             print("No stats to write. Exiting.")
@@ -177,7 +246,8 @@ class WeeklyStatsPipeline:
         # Summary
         result = {
             "status": "success" if not dry_run else "dry_run",
-            "tickers_processed": tickers_with_stats,
+            "tickers_with_ev_ebit": tickers_with_ev_ebit,
+            "tickers_with_ev_ebitda": tickers_with_ev_ebitda,
             "tickers_insufficient": tickers_insufficient,
             "total_feature_rows": len(features_df),
         }
@@ -202,8 +272,8 @@ class WeeklyStatsPipeline:
         Returns:
             DataFrame with historical features
         """
-        # Get list of available feature dates
-        available_dates = self.r2.list_feature_dates(limit=window_days + 100)
+        # Get list of available feature dates (use high limit to get recent dates)
+        available_dates = self.r2.list_feature_dates(limit=5000)
 
         if not available_dates:
             return pd.DataFrame()
@@ -233,6 +303,100 @@ class WeeklyStatsPipeline:
 
         return combined
 
+    def _compute_valuation_from_fundamentals(
+        self, tickers: list[str], start_date: date, end_date: date
+    ) -> pd.DataFrame:
+        """
+        Compute EV/EBIT time series directly from prices and fundamentals.
+
+        This is used when pre-computed features don't have valuation data.
+
+        Args:
+            tickers: List of ticker symbols
+            start_date: Start date
+            end_date: End date
+
+        Returns:
+            DataFrame with columns: date, ticker, ev_ebit, ev_ebitda
+        """
+        print("Computing valuation metrics from raw data...")
+        all_rows = []
+
+        for ticker in tickers:
+            # Load price history
+            prices_df = self.r2.get_timeseries("prices", ticker, start_date, end_date)
+            if prices_df.empty:
+                continue
+
+            # Load fundamentals history
+            funds_df = self.r2.get_timeseries("fundamentals", ticker, start_date, end_date)
+            if funds_df.empty:
+                continue
+
+            # Filter to quarterly fundamentals for TTM calculation
+            # Handle different period value formats (Quarter, QUARTER, quarter)
+            q_df = funds_df[funds_df["period"].str.lower() == "quarter"].copy()
+            if len(q_df) < 4:
+                print(f"  {ticker}: Only {len(q_df)} quarters, need 4 for TTM")
+                continue
+
+            # Sort by period_end
+            q_df = q_df.sort_values("period_end")
+            q_df["period_end"] = pd.to_datetime(q_df["period_end"])
+
+            # Compute TTM operating income (rolling 4 quarters)
+            if "operating_income" in q_df.columns:
+                q_df["operating_income_ttm"] = q_df["operating_income"].rolling(4, min_periods=4).sum()
+            else:
+                continue
+
+            # For each price date, find the most recent TTM operating income
+            prices_df = prices_df.copy()
+            prices_df["date"] = pd.to_datetime(prices_df["date"])
+            prices_df = prices_df.sort_values("date")
+
+            for _, price_row in prices_df.iterrows():
+                price_date = price_row["date"]
+                close = price_row["close"]
+
+                # Find most recent fundamentals as of this date
+                valid_funds = q_df[q_df["period_end"] <= price_date]
+                if valid_funds.empty:
+                    continue
+
+                latest_fund = valid_funds.iloc[-1]
+                op_income_ttm = latest_fund.get("operating_income_ttm")
+
+                if pd.isna(op_income_ttm) or op_income_ttm <= 0:
+                    continue
+
+                # Get shares outstanding (use most recent)
+                shares = latest_fund.get("average_shares")
+                if pd.isna(shares) or shares <= 0:
+                    continue
+
+                # Compute market cap and EV
+                market_cap = close * shares
+
+                # Use net debt from balance sheet if available, else skip
+                # For simplicity, we'll estimate EV = market_cap (no debt adjustment)
+                # TODO: Add proper net debt calculation from balance sheet
+                enterprise_value = market_cap
+
+                ev_ebit = enterprise_value / op_income_ttm if op_income_ttm > 0 else None
+
+                all_rows.append({
+                    "date": price_date,
+                    "ticker": ticker,
+                    "ev_ebit": ev_ebit,
+                    "close": close,
+                })
+
+        if not all_rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(all_rows)
+
     def _compute_stats(self, values: pd.Series) -> dict:
         """
         Compute distribution statistics for a series of values.
@@ -255,110 +419,6 @@ class WeeklyStatsPipeline:
             "p80": float(np.percentile(values, 80)),
             "p90": float(np.percentile(values, 90)),
         }
-
-    def backfill_from_signals_valuation(
-        self,
-        tickers: Optional[list[str]] = None,
-        years: int = 5,
-        dry_run: bool = False,
-    ) -> dict:
-        """
-        Backfill valuation stats from the existing signals_valuation dataset.
-
-        This is useful for initial setup before the daily features dataset has
-        enough history.
-
-        Args:
-            tickers: Optional list of tickers
-            years: Number of years of history
-            dry_run: Don't write to Supabase
-
-        Returns:
-            Summary dict
-        """
-        print("\n" + "=" * 70)
-        print("BACKFILL VALUATION STATS FROM SIGNALS_VALUATION")
-        print("=" * 70)
-
-        if tickers is None:
-            tickers = self.db.get_active_tickers()
-
-        if not tickers:
-            print("No active tickers. Exiting.")
-            return {"status": "no_tickers", "tickers_processed": 0}
-
-        print(f"Processing {len(tickers)} tickers...")
-
-        from src.reader import TimeSeriesReader
-
-        reader = TimeSeriesReader()
-        end_date = date.today()
-        start_date = end_date - timedelta(days=years * 365)
-
-        stats_rows = []
-        tickers_processed = 0
-        tickers_failed = 0
-
-        for ticker in tickers:
-            try:
-                # Read from signals_valuation
-                df = reader.r2.get_timeseries(
-                    dataset="signals_valuation",
-                    ticker=ticker,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-
-                if df.empty or "ev_ebitda" not in df.columns:
-                    tickers_failed += 1
-                    continue
-
-                # Get valid EV/EBITDA values
-                ev_ebitda = df["ev_ebitda"].dropna()
-                ev_ebitda = ev_ebitda[ev_ebitda > 0]
-
-                if len(ev_ebitda) < MIN_DATA_POINTS:
-                    tickers_failed += 1
-                    continue
-
-                # Compute stats
-                stats = self._compute_stats(ev_ebitda)
-                stats["ticker"] = ticker
-                stats["metric"] = "ev_ebitda"
-                stats["window_days"] = years * 252  # Approximate trading days
-                stats["asof_date"] = df["date"].max()
-
-                if hasattr(stats["asof_date"], "isoformat"):
-                    stats["asof_date"] = stats["asof_date"].isoformat()
-                elif hasattr(stats["asof_date"], "strftime"):
-                    stats["asof_date"] = stats["asof_date"].strftime("%Y-%m-%d")
-
-                stats_rows.append(stats)
-                tickers_processed += 1
-
-                print(f"  {ticker}: {len(ev_ebitda)} points, p20={stats['p20']:.1f}, p50={stats['p50']:.1f}, p80={stats['p80']:.1f}")
-
-            except Exception as e:
-                print(f"  {ticker}: Error - {e}")
-                tickers_failed += 1
-
-        if not stats_rows:
-            print("No stats computed.")
-            return {"status": "no_stats", "tickers_processed": 0}
-
-        if not dry_run:
-            print(f"\nWriting {len(stats_rows)} stats rows to Supabase...")
-            count = self.db.upsert_valuation_stats(stats_rows)
-            print(f"Upserted {count} rows")
-        else:
-            print("\n[DRY RUN] Skipping write")
-
-        return {
-            "status": "success" if not dry_run else "dry_run",
-            "tickers_processed": tickers_processed,
-            "tickers_failed": tickers_failed,
-        }
-
 
 def main():
     """Main entry point for weekly stats computation."""
@@ -384,17 +444,6 @@ def main():
         help=f"Minimum data points required (default: {MIN_DATA_POINTS})",
     )
     parser.add_argument(
-        "--backfill",
-        action="store_true",
-        help="Backfill from signals_valuation instead of features",
-    )
-    parser.add_argument(
-        "--backfill-years",
-        type=int,
-        default=5,
-        help="Years of history for backfill (default: 5)",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Don't write to Supabase",
@@ -403,19 +452,12 @@ def main():
     args = parser.parse_args()
 
     with WeeklyStatsPipeline() as pipeline:
-        if args.backfill:
-            result = pipeline.backfill_from_signals_valuation(
-                tickers=args.tickers,
-                years=args.backfill_years,
-                dry_run=args.dry_run,
-            )
-        else:
-            result = pipeline.run(
-                tickers=args.tickers,
-                window_days=args.window_days,
-                min_data_points=args.min_data_points,
-                dry_run=args.dry_run,
-            )
+        result = pipeline.run(
+            tickers=args.tickers,
+            window_days=args.window_days,
+            min_data_points=args.min_data_points,
+            dry_run=args.dry_run,
+        )
 
         if result["status"] not in ("success", "dry_run"):
             exit(1)

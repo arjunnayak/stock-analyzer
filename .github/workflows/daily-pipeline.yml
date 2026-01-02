@@ -1,9 +1,9 @@
 name: Daily Pipeline
 
 # End-of-day workflow that:
-# 1. Ingests latest prices from EODHD (creates price snapshot)
-# 2. Computes daily features (EMA, EV/EBITDA) to wide features table
-# 3. Evaluates hardcoded templates and stores triggers
+# 1. Ingests latest prices from EODHD
+# 2. Creates price snapshot + computes daily features (EMA, EV/EBITDA)
+# 3. Evaluates hardcoded templates and sends email alerts
 on:
   schedule:
     # Run at 11 PM UTC daily (6 PM ET)
@@ -28,6 +28,11 @@ on:
         default: false
       skip_templates:
         description: 'Skip template evaluation step'
+        required: false
+        type: boolean
+        default: false
+      skip_alerts:
+        description: 'Skip alert notifications step'
         required: false
         type: boolean
         default: false
@@ -84,9 +89,9 @@ jobs:
           fi
 
       # ===================================================================
-      # STEP 2: Compute Daily Features (EMA, EV/EBITDA) to Wide Table
+      # STEP 2: Create Price Snapshot + Compute Daily Features
       # ===================================================================
-      - name: 2. Compute daily features
+      - name: 2. Create snapshot and compute features
         if: ${{ !inputs.skip_features }}
         env:
           ENV: REMOTE
@@ -98,28 +103,28 @@ jobs:
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: |
           echo "======================================================================"
-          echo "STEP 2: Computing Daily Features"
+          echo "STEP 2: Creating Price Snapshot + Computing Daily Features"
           echo "======================================================================"
 
-          # Determine run date
-          RUN_DATE="${{ github.event.inputs.run_date }}"
-          if [ -z "$RUN_DATE" ]; then
-            RUN_DATE=$(date +%Y-%m-%d)
+          # Build args (use latest available data by default)
+          ARGS="--skip-templates --skip-alerts"
+
+          # Only specify run_date if explicitly provided
+          if [ -n "${{ github.event.inputs.run_date }}" ]; then
+            ARGS="$ARGS --run-date ${{ github.event.inputs.run_date }}"
           fi
 
-          # Build args
-          ARGS="--run-date $RUN_DATE"
           if [ -n "${{ github.event.inputs.tickers }}" ]; then
             ARGS="$ARGS --tickers ${{ github.event.inputs.tickers }}"
           fi
 
-          echo "Running: python -m src.features.pipeline_daily $ARGS --skip-templates"
-          uv run python -m src.features.pipeline_daily $ARGS --skip-templates
+          echo "Running: python -m src.features.pipeline_daily $ARGS"
+          uv run python -m src.features.pipeline_daily $ARGS
 
       # ===================================================================
-      # STEP 3: Evaluate Hardcoded Templates
+      # STEP 3: Evaluate Templates and Send Alert Emails
       # ===================================================================
-      - name: 3. Evaluate templates
+      - name: 3. Evaluate templates and send alerts
         if: ${{ !inputs.skip_templates }}
         env:
           ENV: REMOTE
@@ -129,19 +134,32 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
+          FROM_NAME: ${{ secrets.FROM_NAME }}
         run: |
           echo "======================================================================"
-          echo "STEP 3: Evaluating Hardcoded Templates"
+          echo "STEP 3: Evaluating Templates and Sending Alert Emails"
           echo "======================================================================"
 
-          # Determine run date
-          RUN_DATE="${{ github.event.inputs.run_date }}"
-          if [ -z "$RUN_DATE" ]; then
-            RUN_DATE=$(date +%Y-%m-%d)
+          # Build args (skip snapshot since it was created in Step 2, skip features since they were computed in Step 2)
+          ARGS="--skip-snapshot --skip-features"
+
+          # Only specify run_date if explicitly provided
+          if [ -n "${{ github.event.inputs.run_date }}" ]; then
+            ARGS="$ARGS --run-date ${{ github.event.inputs.run_date }}"
           fi
 
-          echo "Running: python -m src.features.pipeline_daily --run-date $RUN_DATE --skip-features"
-          uv run python -m src.features.pipeline_daily --run-date $RUN_DATE --skip-features
+          # Add skip-alerts flag if requested
+          if [ "${{ inputs.skip_alerts }}" = "true" ]; then
+            ARGS="$ARGS --skip-alerts"
+          fi
+
+          echo "Running: python -m src.features.pipeline_daily $ARGS"
+          uv run python -m src.features.pipeline_daily $ARGS
 
       # ===================================================================
       # Artifacts and Notifications
@@ -164,8 +182,10 @@ jobs:
           echo "======================================================================"
           echo "All steps completed:"
           echo "  ✓ Price data ingested"
+          echo "  ✓ Price snapshot created"
           echo "  ✓ Daily features computed (EMA, EV/EBITDA)"
           echo "  ✓ Hardcoded templates evaluated"
+          echo "  ✓ Email alerts sent to users"
 
       - name: Notify on failure
         if: failure()

@@ -193,7 +193,8 @@ class DoltClient:
                 inc.period,
                 inc.sales as revenue,
                 inc.gross_profit,
-                inc.income_after_depreciation as operating_income,
+                inc.income_after_depreciation_and_amortization as operating_income,
+                inc.non_operating_income,
                 inc.net_income,
                 inc.diluted_net_eps,
                 inc.average_shares,
@@ -202,8 +203,9 @@ class DoltClient:
                 inc.interest_expense,
                 inc.depreciation_and_amortization,
                 inc.cost_of_goods,
-                inc.selling_administrative,
+                inc.selling_administrative_depreciation_amortization_expenses,
                 inc.income_from_continuing_operations,
+                inc.income_before_depreciation_and_amortization,
                 -- Balance sheet assets
                 assets.cash_and_equivalents,
                 -- Balance sheet liabilities
@@ -478,6 +480,13 @@ class BackfillPipeline:
             )
             ebitda_ttm = float(ebitda_4q.sum())
 
+        # Compute operating income TTM (EBIT)
+        operating_income_ttm = None
+        if "operating_income" in df.columns:
+            op_income_values = recent_4q["operating_income"].dropna()
+            if len(op_income_values) >= 4:
+                operating_income_ttm = float(op_income_values.sum())
+
         revenue_ttm = None
         if "revenue" in df.columns:
             revenue_ttm = float(recent_4q["revenue"].fillna(0).sum())
@@ -521,6 +530,7 @@ class BackfillPipeline:
             "ticker": ticker,
             "asof_date": asof_date.isoformat(),
             "ebitda_ttm": ebitda_ttm,
+            "operating_income_ttm": operating_income_ttm,
             "revenue_ttm": revenue_ttm,
             "net_debt": net_debt,
             "shares_outstanding": shares_outstanding,
@@ -529,7 +539,7 @@ class BackfillPipeline:
         }
 
         if self.dry_run:
-            print(f"  🏃 [DRY RUN] Would upsert fundamentals_latest: ebitda_ttm={ebitda_ttm}, shares={shares_outstanding}")
+            print(f"  🏃 [DRY RUN] Would upsert fundamentals_latest: ebitda_ttm={ebitda_ttm}, operating_income_ttm={operating_income_ttm}, shares={shares_outstanding}")
             return True
 
         # Upsert to Supabase

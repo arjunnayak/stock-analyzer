@@ -154,6 +154,7 @@ class FeaturesComputer:
         print(f"  - Tickers processed: {len(features_df)}")
         print(f"  - Cold starts: {cold_starts}")
         print(f"  - EMA 200 valid: {features_df['ema_200'].notna().sum()}")
+        print(f"  - EV/EBIT valid: {features_df['ev_ebit'].notna().sum()}")
         print(f"  - EV/EBITDA valid: {features_df['ev_ebitda'].notna().sum()}")
 
         if dry_run:
@@ -181,6 +182,7 @@ class FeaturesComputer:
             "tickers_processed": len(features_df),
             "cold_starts": cold_starts,
             "ema_200_valid": int(features_df["ema_200"].notna().sum()),
+            "ev_ebit_valid": int(features_df["ev_ebit"].notna().sum()),
             "ev_ebitda_valid": int(features_df["ev_ebitda"].notna().sum()),
         }
 
@@ -283,10 +285,12 @@ class FeaturesComputer:
             else:
                 ema_50 = close
 
-        # Compute EV/EBITDA
+        # Compute EV/EBIT and EV/EBITDA
+        ev_ebit = None
         ev_ebitda = None
         market_cap = None
         enterprise_value = None
+        operating_income_ttm = None
         ebitda_ttm = None
         sector = None
 
@@ -301,6 +305,13 @@ class FeaturesComputer:
                 )
                 enterprise_value = market_cap + net_debt
 
+                # EV/EBIT (preferred - available quarterly)
+                ebit = fundamentals.operating_income_ttm
+                if ebit and ebit > 0:
+                    operating_income_ttm = ebit
+                    ev_ebit = enterprise_value / ebit
+
+                # EV/EBITDA (fallback - only yearly D&A available)
                 ebitda = fundamentals.ebitda_ttm
                 if ebitda and ebitda > 0:
                     ebitda_ttm = ebitda
@@ -323,9 +334,11 @@ class FeaturesComputer:
             "prev_close": prev_close,
             "prev_ema_200": prev_ema_200,
             "prev_ema_50": prev_ema_50,
-            "ev_ebitda": ev_ebitda,
+            "ev_ebit": ev_ebit,  # Preferred - quarterly granularity
+            "ev_ebitda": ev_ebitda,  # Fallback - yearly D&A only
             "market_cap": market_cap,
             "enterprise_value": enterprise_value,
+            "operating_income_ttm": operating_income_ttm,
             "ebitda_ttm": ebitda_ttm,
             "sector": sector,
         }
@@ -622,11 +635,27 @@ class FeaturesComputer:
         if "shares_outstanding" not in df.columns and "average_shares" in df.columns:
             df["shares_outstanding"] = df["average_shares"]
 
+        # Get Operating Income (EBIT) - available quarterly
+        if "operating_income" in df.columns:
+            df["operating_income_q"] = df["operating_income"]
+        elif "income_after_depreciation_and_amortization" in df.columns:
+            df["operating_income_q"] = df["income_after_depreciation_and_amortization"]
+        else:
+            df["operating_income_q"] = None
+
+        # Compute TTM Operating Income (trailing 4 quarters)
+        if df["operating_income_q"].notna().any():
+            df["operating_income_ttm"] = df["operating_income_q"].rolling(window=4, min_periods=4).sum()
+        else:
+            df["operating_income_ttm"] = None
+
         # Get EBITDA (use income_before_depreciation if available)
-        if "income_before_depreciation" in df.columns:
+        if "income_before_depreciation_and_amortization" in df.columns:
+            df["ebitda_q"] = df["income_before_depreciation_and_amortization"]
+        elif "income_before_depreciation" in df.columns:
             df["ebitda_q"] = df["income_before_depreciation"]
         else:
-            # Fallback: compute from components
+            # Fallback: compute from components (only works with yearly D&A)
             df["ebitda_q"] = df.get("net_income", 0)
             if "interest_expense" in df.columns:
                 df["ebitda_q"] = df["ebitda_q"] + df["interest_expense"].fillna(0)
@@ -650,7 +679,7 @@ class FeaturesComputer:
             df["cash_and_equivalents"] = 0
 
         # Select relevant columns
-        result_cols = ["date", "shares_outstanding", "total_debt", "cash_and_equivalents", "ebitda_ttm"]
+        result_cols = ["date", "shares_outstanding", "total_debt", "cash_and_equivalents", "operating_income_ttm", "ebitda_ttm"]
         result = df[[c for c in result_cols if c in df.columns]].copy()
 
         return result
@@ -675,13 +704,13 @@ class FeaturesComputer:
 
     def _compute_valuation_series(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Compute EV/EBITDA for each row using point-in-time fundamentals.
+        Compute EV/EBIT and EV/EBITDA for each row using point-in-time fundamentals.
 
         Args:
-            df: DataFrame with close, shares_outstanding, total_debt, cash, ebitda_ttm
+            df: DataFrame with close, shares_outstanding, total_debt, cash, operating_income_ttm, ebitda_ttm
 
         Returns:
-            DataFrame with ev_ebitda, market_cap, enterprise_value added
+            DataFrame with ev_ebit, ev_ebitda, market_cap, enterprise_value added
         """
         df = df.copy()
 
@@ -700,7 +729,15 @@ class FeaturesComputer:
                 - df.get("cash_and_equivalents", pd.Series(0, index=df.index)).fillna(0)
             )
 
-        # EV/EBITDA
+        # EV/EBIT (preferred - quarterly granularity)
+        df["ev_ebit"] = None
+        if "enterprise_value" in df.columns and "operating_income_ttm" in df.columns:
+            valid_mask = (df["operating_income_ttm"] > 0) & df["enterprise_value"].notna()
+            df.loc[valid_mask, "ev_ebit"] = (
+                df.loc[valid_mask, "enterprise_value"] / df.loc[valid_mask, "operating_income_ttm"]
+            )
+
+        # EV/EBITDA (fallback - yearly D&A only)
         df["ev_ebitda"] = None
         if "enterprise_value" in df.columns and "ebitda_ttm" in df.columns:
             valid_mask = (df["ebitda_ttm"] > 0) & df["enterprise_value"].notna()

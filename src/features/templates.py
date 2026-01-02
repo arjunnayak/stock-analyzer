@@ -236,35 +236,35 @@ class ExtendedAboveTrend(Template):
 
 
 # =============================================================================
-# T5: EV/EBITDA cheap absolute + trend filter
+# T5: EV/EBIT cheap absolute + trend filter
 # =============================================================================
 class CheapAbsoluteWithTrend(Template):
     id = "T5"
     name = "Value + momentum"
-    description = "Cheap EV/EBITDA (<=10x) with price above 200 EMA"
-    required_features = ["ev_ebitda", "close", "ema_200"]
+    description = "Cheap EV/EBIT (<=12x) with price above 200 EMA"
+    required_features = ["ev_ebit", "close", "ema_200"]
 
-    EV_EBITDA_THRESHOLD = 10.0
+    EV_EBIT_THRESHOLD = 12.0  # EV/EBIT typically slightly higher than EV/EBITDA
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.check_requirements(df):
             return pd.DataFrame()
 
-        # Trigger: ev_ebitda <= 10 AND close > ema_200
+        # Trigger: ev_ebit <= 12 AND close > ema_200
         mask = (
-            (df["ev_ebitda"] <= self.EV_EBITDA_THRESHOLD)
+            (df["ev_ebit"] <= self.EV_EBIT_THRESHOLD)
             & (df["close"] > df["ema_200"])
-            & df["ev_ebitda"].notna()
+            & df["ev_ebit"].notna()
             & df["ema_200"].notna()
         )
 
         triggered = df[mask].copy()
-        # Lower EV/EBITDA = stronger signal
-        triggered["strength"] = (self.EV_EBITDA_THRESHOLD - triggered["ev_ebitda"]) / self.EV_EBITDA_THRESHOLD
+        # Lower EV/EBIT = stronger signal
+        triggered["strength"] = (self.EV_EBIT_THRESHOLD - triggered["ev_ebit"]) / self.EV_EBIT_THRESHOLD
 
         def reasons(row):
             return {
-                "ev_ebitda": round(row["ev_ebitda"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
                 "close": round(row["close"], 2),
                 "ema_200": round(row["ema_200"], 2),
             }
@@ -273,15 +273,15 @@ class CheapAbsoluteWithTrend(Template):
 
 
 # =============================================================================
-# T6: EV/EBITDA expensive absolute + extension
+# T6: EV/EBIT expensive absolute + extension
 # =============================================================================
 class ExpensiveWithExtension(Template):
     id = "T6"
     name = "Expensive + extended"
-    description = "Expensive EV/EBITDA (>=25x) and extended 15%+ above 200 EMA"
-    required_features = ["ev_ebitda", "close", "ema_200"]
+    description = "Expensive EV/EBIT (>=30x) and extended 15%+ above 200 EMA"
+    required_features = ["ev_ebit", "close", "ema_200"]
 
-    EV_EBITDA_THRESHOLD = 25.0
+    EV_EBIT_THRESHOLD = 30.0  # EV/EBIT typically slightly higher than EV/EBITDA
     EXTENSION_THRESHOLD = 0.15
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -291,11 +291,11 @@ class ExpensiveWithExtension(Template):
         df = df.copy()
         df["extension"] = (df["close"] - df["ema_200"]) / df["ema_200"]
 
-        # Trigger: ev_ebitda >= 25 AND extension >= 0.15
+        # Trigger: ev_ebit >= 30 AND extension >= 0.15
         mask = (
-            (df["ev_ebitda"] >= self.EV_EBITDA_THRESHOLD)
+            (df["ev_ebit"] >= self.EV_EBIT_THRESHOLD)
             & (df["extension"] >= self.EXTENSION_THRESHOLD)
-            & df["ev_ebitda"].notna()
+            & df["ev_ebit"].notna()
             & df["ema_200"].notna()
         )
 
@@ -304,7 +304,7 @@ class ExpensiveWithExtension(Template):
 
         def reasons(row):
             return {
-                "ev_ebitda": round(row["ev_ebitda"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
                 "close": round(row["close"], 2),
                 "ema_200": round(row["ema_200"], 2),
                 "extension_pct": round(row["extension"] * 100, 1),
@@ -314,76 +314,76 @@ class ExpensiveWithExtension(Template):
 
 
 # =============================================================================
-# T7: EV/EBITDA cheap vs 5-year history (percentile)
+# T7: EV/EBIT cheap vs 5-year history (percentile)
 # =============================================================================
 class CheapVsHistory(Template):
     id = "T7"
     name = "Cheap vs history"
-    description = "EV/EBITDA is below 20th percentile of its own 5-year history"
-    required_features = ["ev_ebitda"]
-    required_stats = ["ev_ebitda_p20"]
+    description = "EV/EBIT is below 20th percentile of its own 5-year history"
+    required_features = ["ev_ebit"]
+    required_stats = ["ev_ebit_p20"]
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.check_requirements(df):
             return pd.DataFrame()
 
-        if "ev_ebitda_p20" not in df.columns:
-            print(f"  [{self.id}] Missing stats column: ev_ebitda_p20")
+        if "ev_ebit_p20" not in df.columns:
+            print(f"  [{self.id}] Missing stats column: ev_ebit_p20")
             return pd.DataFrame()
 
-        # Trigger: ev_ebitda <= p20
+        # Trigger: ev_ebit <= p20
         mask = (
-            (df["ev_ebitda"] <= df["ev_ebitda_p20"])
-            & df["ev_ebitda"].notna()
-            & df["ev_ebitda_p20"].notna()
+            (df["ev_ebit"] <= df["ev_ebit_p20"])
+            & df["ev_ebit"].notna()
+            & df["ev_ebit_p20"].notna()
         )
 
         triggered = df[mask].copy()
         # Strength: how far below p20
-        triggered["strength"] = (triggered["ev_ebitda_p20"] - triggered["ev_ebitda"]) / triggered["ev_ebitda_p20"]
+        triggered["strength"] = (triggered["ev_ebit_p20"] - triggered["ev_ebit"]) / triggered["ev_ebit_p20"]
 
         def reasons(row):
             return {
-                "ev_ebitda": round(row["ev_ebitda"], 1),
-                "p20": round(row["ev_ebitda_p20"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
+                "p20": round(row["ev_ebit_p20"], 1),
             }
 
         return self._build_result_df(triggered, "strength", reasons)
 
 
 # =============================================================================
-# T8: EV/EBITDA expensive vs 5-year history (percentile)
+# T8: EV/EBIT expensive vs 5-year history (percentile)
 # =============================================================================
 class ExpensiveVsHistory(Template):
     id = "T8"
     name = "Expensive vs history"
-    description = "EV/EBITDA is above 80th percentile of its own 5-year history"
-    required_features = ["ev_ebitda"]
-    required_stats = ["ev_ebitda_p80"]
+    description = "EV/EBIT is above 80th percentile of its own 5-year history"
+    required_features = ["ev_ebit"]
+    required_stats = ["ev_ebit_p80"]
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.check_requirements(df):
             return pd.DataFrame()
 
-        if "ev_ebitda_p80" not in df.columns:
-            print(f"  [{self.id}] Missing stats column: ev_ebitda_p80")
+        if "ev_ebit_p80" not in df.columns:
+            print(f"  [{self.id}] Missing stats column: ev_ebit_p80")
             return pd.DataFrame()
 
-        # Trigger: ev_ebitda >= p80
+        # Trigger: ev_ebit >= p80
         mask = (
-            (df["ev_ebitda"] >= df["ev_ebitda_p80"])
-            & df["ev_ebitda"].notna()
-            & df["ev_ebitda_p80"].notna()
+            (df["ev_ebit"] >= df["ev_ebit_p80"])
+            & df["ev_ebit"].notna()
+            & df["ev_ebit_p80"].notna()
         )
 
         triggered = df[mask].copy()
         # Strength: how far above p80
-        triggered["strength"] = (triggered["ev_ebitda"] - triggered["ev_ebitda_p80"]) / triggered["ev_ebitda_p80"]
+        triggered["strength"] = (triggered["ev_ebit"] - triggered["ev_ebit_p80"]) / triggered["ev_ebit_p80"]
 
         def reasons(row):
             return {
-                "ev_ebitda": round(row["ev_ebitda"], 1),
-                "p80": round(row["ev_ebitda_p80"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
+                "p80": round(row["ev_ebit_p80"], 1),
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -395,33 +395,33 @@ class ExpensiveVsHistory(Template):
 class ValueAtMedian(Template):
     id = "T9"
     name = "Fair value"
-    description = "EV/EBITDA is at or below median of its 5-year history"
-    required_features = ["ev_ebitda"]
-    required_stats = ["ev_ebitda_p50"]
+    description = "EV/EBIT is at or below median of its 5-year history"
+    required_features = ["ev_ebit"]
+    required_stats = ["ev_ebit_p50"]
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.check_requirements(df):
             return pd.DataFrame()
 
-        if "ev_ebitda_p50" not in df.columns:
-            print(f"  [{self.id}] Missing stats column: ev_ebitda_p50")
+        if "ev_ebit_p50" not in df.columns:
+            print(f"  [{self.id}] Missing stats column: ev_ebit_p50")
             return pd.DataFrame()
 
-        # Trigger: ev_ebitda <= p50 (simple version without prev comparison)
+        # Trigger: ev_ebit <= p50 (simple version without prev comparison)
         mask = (
-            (df["ev_ebitda"] <= df["ev_ebitda_p50"])
-            & df["ev_ebitda"].notna()
-            & df["ev_ebitda_p50"].notna()
+            (df["ev_ebit"] <= df["ev_ebit_p50"])
+            & df["ev_ebit"].notna()
+            & df["ev_ebit_p50"].notna()
         )
 
         triggered = df[mask].copy()
         # Strength: how far below median (negative = above)
-        triggered["strength"] = (triggered["ev_ebitda_p50"] - triggered["ev_ebitda"]) / triggered["ev_ebitda_p50"]
+        triggered["strength"] = (triggered["ev_ebit_p50"] - triggered["ev_ebit"]) / triggered["ev_ebit_p50"]
 
         def reasons(row):
             return {
-                "ev_ebitda": round(row["ev_ebitda"], 1),
-                "p50_median": round(row["ev_ebitda_p50"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
+                "p50_median": round(row["ev_ebit_p50"], 1),
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -433,40 +433,40 @@ class ValueAtMedian(Template):
 class TrendUpValueCheap(Template):
     id = "T10"
     name = "Uptrend + cheap"
-    description = "Uptrend (EMA50 > EMA200) with EV/EBITDA below 20th percentile"
-    required_features = ["ema_50", "ema_200", "ev_ebitda"]
-    required_stats = ["ev_ebitda_p20"]
+    description = "Uptrend (EMA50 > EMA200) with EV/EBIT below 20th percentile"
+    required_features = ["ema_50", "ema_200", "ev_ebit"]
+    required_stats = ["ev_ebit_p20"]
 
     def evaluate(self, df: pd.DataFrame) -> pd.DataFrame:
         if not self.check_requirements(df):
             return pd.DataFrame()
 
-        if "ev_ebitda_p20" not in df.columns:
-            print(f"  [{self.id}] Missing stats column: ev_ebitda_p20")
+        if "ev_ebit_p20" not in df.columns:
+            print(f"  [{self.id}] Missing stats column: ev_ebit_p20")
             return pd.DataFrame()
 
-        # Trigger: ema_50 > ema_200 AND ev_ebitda <= p20
+        # Trigger: ema_50 > ema_200 AND ev_ebit <= p20
         mask = (
             (df["ema_50"] > df["ema_200"])
-            & (df["ev_ebitda"] <= df["ev_ebitda_p20"])
+            & (df["ev_ebit"] <= df["ev_ebit_p20"])
             & df["ema_50"].notna()
             & df["ema_200"].notna()
-            & df["ev_ebitda"].notna()
-            & df["ev_ebitda_p20"].notna()
+            & df["ev_ebit"].notna()
+            & df["ev_ebit_p20"].notna()
         )
 
         triggered = df[mask].copy()
         # Strength: trend strength * value discount
         triggered["trend_strength"] = (triggered["ema_50"] - triggered["ema_200"]) / triggered["ema_200"]
-        triggered["value_strength"] = (triggered["ev_ebitda_p20"] - triggered["ev_ebitda"]) / triggered["ev_ebitda_p20"]
+        triggered["value_strength"] = (triggered["ev_ebit_p20"] - triggered["ev_ebit"]) / triggered["ev_ebit_p20"]
         triggered["strength"] = triggered["trend_strength"] + triggered["value_strength"]
 
         def reasons(row):
             return {
                 "ema_50": round(row["ema_50"], 2),
                 "ema_200": round(row["ema_200"], 2),
-                "ev_ebitda": round(row["ev_ebitda"], 1),
-                "p20": round(row["ev_ebitda_p20"], 1),
+                "ev_ebit": round(row["ev_ebit"], 1),
+                "p20": round(row["ev_ebit_p20"], 1),
             }
 
         return self._build_result_df(triggered, "strength", reasons)
@@ -573,7 +573,7 @@ if __name__ == "__main__":
                 "prev_close": 99,
                 "prev_ema_200": 100,
                 "prev_ema_50": 101,
-                "ev_ebitda": 15,
+                "ev_ebit": 18,
             },
             # T2: Cross below 200 EMA
             {
@@ -584,7 +584,7 @@ if __name__ == "__main__":
                 "prev_close": 101,
                 "prev_ema_200": 100,
                 "prev_ema_50": 99,
-                "ev_ebitda": 20,
+                "ev_ebit": 24,
             },
             # T3: Pullback in uptrend
             {
@@ -595,7 +595,7 @@ if __name__ == "__main__":
                 "prev_close": 118,
                 "prev_ema_200": 99,
                 "prev_ema_50": 119,
-                "ev_ebitda": 12,
+                "ev_ebit": 14,
             },
             # T4: Extended above trend
             {
@@ -606,7 +606,7 @@ if __name__ == "__main__":
                 "prev_close": 128,
                 "prev_ema_200": 99,
                 "prev_ema_50": 114,
-                "ev_ebitda": 30,
+                "ev_ebit": 35,
             },
             # T5: Cheap absolute with trend
             {
@@ -617,7 +617,7 @@ if __name__ == "__main__":
                 "prev_close": 108,
                 "prev_ema_200": 99,
                 "prev_ema_50": 104,
-                "ev_ebitda": 8,
+                "ev_ebit": 10,
             },
             # No triggers
             {
@@ -628,18 +628,18 @@ if __name__ == "__main__":
                 "prev_close": 100,
                 "prev_ema_200": 100,
                 "prev_ema_50": 100,
-                "ev_ebitda": 15,
+                "ev_ebit": 18,
             },
         ]
     )
 
     # Add valuation stats columns for templates that need them
-    sample_data["ev_ebitda_p20"] = 10
-    sample_data["ev_ebitda_p50"] = 15
-    sample_data["ev_ebitda_p80"] = 25
+    sample_data["ev_ebit_p20"] = 12
+    sample_data["ev_ebit_p50"] = 18
+    sample_data["ev_ebit_p80"] = 30
 
     print("\nSample data:")
-    print(sample_data[["ticker", "close", "ema_200", "ema_50", "ev_ebitda"]].to_string(index=False))
+    print(sample_data[["ticker", "close", "ema_200", "ema_50", "ev_ebit"]].to_string(index=False))
 
     print("\n" + "=" * 60)
     print("Evaluating all templates...")

@@ -21,13 +21,43 @@
 
 ---
 
+## 1.1 Python Execution Convention
+
+**⚠️ CRITICAL: Always use `uv run python` for Python execution**
+
+This project uses [uv](https://github.com/astral-sh/uv) for dependency management and virtual environment handling.
+
+**DO:**
+```bash
+uv run python scripts/ingest_prices.py
+uv run python -m src.features.pipeline_daily
+uv run python tests/test_templates.py
+```
+
+**DON'T:**
+```bash
+python scripts/ingest_prices.py  # ❌ Wrong - won't use correct dependencies
+python -m src.features.pipeline_daily  # ❌ Wrong - may use wrong environment
+pytest tests/  # ❌ Wrong - use uv run python instead
+```
+
+**Why?**
+- `uv run` ensures correct virtual environment and dependencies
+- Avoids "module not found" errors
+- Consistent behavior across local and CI environments
+- Automatic dependency installation if needed
+
+**Exception:** GitHub Actions workflows already run in the correct environment, so they use `uv run python` directly in workflow YAML files.
+
+---
+
 ## 2. Architecture Diagrams
 
 ### 2.1 Data Flow Architecture
 
 ```
 ┌─────────────────┐
-│  EODHD API      │ (Price & Fundamental Data)
+│  EODHD API      │ (Price & Fundamental Data; large historical date ranges use dolt db for cost efficiency)
 └────────┬────────┘
          │
          ▼
@@ -62,28 +92,52 @@
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Storage Layer                                           │
-│                                                           │
+│  Storage Layer                                          │
+│                                                         │
 │  R2 (Cloudflare)              Supabase (PostgreSQL)     │
-│  ├─ prices_ingestion/         ├─ users                  │
-│  ├─ prices_snapshot/           ├─ entities              │
-│  ├─ features_daily/            ├─ watchlists            │
+│  ├─ prices/                    ├─ users                 │
+│  ├─ prices_snapshots/          ├─ entities              │
+│  ├─ features/                  ├─ watchlists            │
 │  ├─ triggers/                  ├─ indicator_state       │
-│  ├─ fundamentals_quarterly/    ├─ valuation_stats       │
-│  └─ fundamentals_annual/       ├─ backfill_queue        │
-│                                 └─ alert_history         │
+│  ├─ fundamentals/              ├─ valuation_stats       │
+│                                ├─ backfill_queue        │
+│                                └─ alert_history         │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Template Data Dependencies** (Minimal Requirements):
+
+```
+TEMPLATES (10 total)
+    │
+    ├── T1-T4 (Pure Technical)
+    │     └─→ features_daily → prices (200 days)
+    │         - close, ema_200, ema_50, prev_close, prev_ema_200
+    │         - NO fundamentals required
+    │
+    ├── T5-T6 (Technical + Valuation)
+    │     └─→ features_daily → prices (200 days) + fundamentals (4 qtrs)
+    │         - close, ema_200, ema_50, ev_ebitda
+    │         - Fundamentals: shares_outstanding, total_debt, cash, ebitda_ttm
+    │
+    └── T7-T10 (Historical Stats)
+          └─→ valuation_stats → features history (5 years)
+              - ev_ebitda, ev_ebitda_p20, ev_ebitda_p50, ev_ebitda_p80
+              - Requires weekly stats pipeline to have run
+```
+
+**Key Insight**: Templates have cascading data requirements:
+- **Basic Testing**: 200 days + 4 quarters = T1-T6 work (6/10 templates)
+- **Full Testing**: 5 years data + weekly stats = T1-T10 work (all templates)
 
 ### 2.2 Storage Architecture
 
 **R2 Bucket Organization** (Parquet files):
-- `prices_ingestion/v1/{YYYY-MM-DD}/{ticker}.parquet` - Raw EODHD daily prices
-- `prices_snapshot/v1/{YYYY-MM-DD}/data.parquet` - Cross-sectional price snapshot
-- `features_daily/v1/{YYYY-MM-DD}/data.parquet` - Wide-row features (all tickers, all features)
-- `triggers/v1/{YYYY-MM-DD}/data.parquet` - Template evaluation results
-- `fundamentals_quarterly/v1/{ticker}/data.parquet` - Quarterly financial statements
-- `fundamentals_annual/v1/{ticker}/data.parquet` - Annual financial statements
+- `prices/v1/{ticker}/{YYYY}/{MM}/data.parquet` - Raw EODHD daily prices
+- `prices_snapshot/v1/date={YYYY-MM-DD}/close.parquet` - Cross-sectional price snapshot
+- `features/v1/date={YYYY-MM-DD}/part-XXX.parquet` - Wide-row features (all tickers, all features)
+- `alerts_eval/v1/date=YYYY-MM-DD/triggers.parquet` - Template evaluation results
+- `fundamentals/v1/{ticker}/{YYYY}/{MM}/data.parquet` - Quarterly & annual financial statements
 
 **Supabase Tables** (PostgreSQL):
 - `users` - User accounts, email preferences, onboarding status
@@ -108,7 +162,7 @@
 
 1. **Ingest Latest Prices** (`scripts/ingest_prices.py`)
    - Fetches EOD prices from EODHD API for all watchlist tickers
-   - Writes to `prices_ingestion/v1/{date}/{ticker}.parquet`
+   - Writes to `prices/v1/{ticker}/{YYYY}/{MM}/data.parquet`
    - Default: last 7 days to handle missing data
 
 2. **Compute Daily Features** (`src/features/pipeline_daily.py`)
@@ -119,13 +173,13 @@
      - Computes EMA 50 incrementally (using stored state)
      - Joins point-in-time fundamentals for valuation
      - Computes EV/EBITDA = (market_cap + total_debt - cash) / ebitda_ttm
-   - **Output**: `features_daily/v1/{date}/data.parquet` (wide-row format)
+   - **Output**: `features/v1/date={YYYY-MM-DD}/part-XXX.parquet` (wide-row format)
    - **State Update**: Upserts `indicator_state` table with latest EMA values
 
 3. **Evaluate Templates** (`src/features/templates.py`)
    - **Input**: Latest features, valuation_stats table
    - **Processing**: Evaluates 10 hardcoded templates (T1-T10)
-   - **Output**: `triggers/v1/{date}/data.parquet`
+   - **Output**: `alerts_eval/v1/date=YYYY-MM-DD/triggers.parquet`
    - **Columns**: date, ticker, template_id, template_name, trigger_strength, reasons_json
 
 4. **Send Alert Notifications** (`src/features/alert_notifications.py`)
@@ -309,6 +363,42 @@ CREATE TABLE alert_history (
   opened_at TIMESTAMPTZ  -- NULL until user opens
 );
 ```
+
+### 5.3 Table Purpose Quick Reference
+
+**TL;DR**: Only `valuation_stats` is truly required (for T7-T10). Everything else is performance optimization.
+
+#### Required vs Optional Tables
+
+| Table | Status | Purpose | Can Skip? |
+|-------|--------|---------|-----------|
+| **valuation_stats** | Required for T7-T10 | 5-year EV/EBITDA percentiles | ✅ Yes (T7-T10 won't work) |
+| **indicator_state** | Performance cache | Stores last EMA values | ✅ Yes (slower, computes from scratch) |
+| **fundamentals_latest** | Performance cache | Cached TTM fundamentals | ⚠️ Maybe (need to read from R2 instead) |
+| **users** | User management | User accounts | ✅ Yes (for testing) |
+| **entities** | Stock metadata | Ticker info | ⚠️ Needed for watchlist |
+| **watchlists** | User management | User stocks | ✅ Yes (for testing) |
+| **alert_history** | Logging | Sent alerts log | ✅ Yes (for testing) |
+
+#### What Happens Without Each Table
+
+**Without `valuation_stats`**:
+- Templates T7-T10 will be skipped (missing required stats)
+- Templates T1-T6 work normally
+- Daily pipeline runs fine
+
+**Without `indicator_state`**:
+- EMA computed from scratch each time (200 days of calculations)
+- Daily pipeline ~2-3x slower
+- Results identical, just takes longer
+
+**Without `fundamentals_latest`**:
+- Must read quarterly data from R2 parquet each time
+- Must compute TTM from 4 quarters each time
+- Daily pipeline ~1.5x slower
+- Requires code change to fallback to R2 (currently expects this table)
+
+**Mental Model**: Think of Supabase tables as caches. The "source of truth" is R2 parquet files.
 
 ---
 
@@ -524,29 +614,29 @@ AWS_SECRET_ACCESS_KEY=<r2-secret>
 **Start Local Stack**:
 ```bash
 docker-compose up -d
-ENV=LOCAL python scripts/ingest_prices.py --tickers AAPL MSFT --days 7
-ENV=LOCAL python -m src.features.pipeline_daily --run-date 2025-12-30
+ENV=LOCAL uv run python scripts/ingest_prices.py --tickers AAPL MSFT --days 7
+ENV=LOCAL uv run python -m src.features.pipeline_daily --run-date 2025-12-30
 ```
 
 ### 9.2 Testing
 
 **Unit Tests**:
 ```bash
-python tests/test_valuation_regime.py  # Valuation computation
-python tests/test_templates.py  # Template evaluation
-python tests/test_features_backfill.py  # Feature backfill
-python tests/test_email_delivery.py  # Email sending
+uv run python tests/test_valuation_regime.py  # Valuation computation
+uv run python tests/test_templates.py  # Template evaluation
+uv run python tests/test_features_backfill.py  # Feature backfill
+uv run python tests/test_email_delivery.py  # Email sending
 ```
 
 **Integration Tests** (with mock data):
 ```bash
-ENV=LOCAL python -m src.features.pipeline_daily --dry-run
+ENV=LOCAL uv run python -m src.features.pipeline_daily --dry-run
 ```
 
 **Manual Testing**:
 ```bash
 # Test alert generation
-python src/email/alerts.py  # Runs __main__ block with sample alerts
+uv run python src/email/alerts.py  # Runs __main__ block with sample alerts
 ```
 
 ### 9.3 Deployment
@@ -568,6 +658,91 @@ npx wrangler deploy
 - `EODHD_API_KEY`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`
 - `ALERT_EMAIL`
+
+### 9.4 Minimal Testing Setup
+
+**TL;DR**: You only need 200 days of price data + 4 quarters fundamentals to test most templates.
+
+#### Quick Start: Test One Ticker (5 minutes)
+
+**Goal**: Get templates T1-T6 working with minimal data
+
+**Step 1: Ingest 200 days of prices**
+```bash
+uv run python scripts/ingest_prices.py --ticker AAPL --days 400  # Extra buffer
+```
+
+**Step 2: Ingest 5 quarters of fundamentals (for safety)**
+```bash
+uv run python scripts/backfill_fundamentals.py --ticker AAPL --quarters 5
+```
+
+**Step 3: Run daily pipeline (will auto-populate tables)**
+```bash
+uv run python -m src.features.pipeline_daily \
+  --run-date 2025-12-30 \
+  --tickers AAPL \
+  --skip-templates  # Compute features only
+```
+
+**Step 4: Evaluate templates**
+```bash
+uv run python -m src.features.pipeline_daily \
+  --run-date 2025-12-30 \
+  --skip-features  # Evaluate templates only
+```
+
+**What just happened**:
+- Features computation auto-populated `indicator_state` table
+- Features computation auto-populated `fundamentals_latest` from R2
+- Templates T1-T6 will work (no stats needed)
+- Templates T7-T10 will be skipped (need valuation_stats)
+
+#### Two-Tier Testing Approach
+
+**Tier 1: Basic Templates (T1-T6) - Fast**
+- **Data needed**: 200 days prices + 4 quarters fundamentals
+- **Time to set up**: ~5 minutes
+- **Templates that work**: T1 (Bullish 200 MA), T2 (Bearish 200 MA), T3 (Pullback), T4 (Extended), T5 (Value+Momentum), T6 (Expensive+Extended)
+- **Templates that skip**: T7-T10 (need historical stats)
+
+**Tier 2: All Templates (T1-T10) - Comprehensive**
+- **Data needed**: 5 years prices + 5 years fundamentals
+- **Time to set up**: ~30 minutes
+- **Additional step**: Run weekly stats once
+  ```bash
+  uv run python -m src.features.pipeline_weekly_stats
+  ```
+- **Templates that work**: All T1-T10
+
+#### Data Completeness Verification
+
+Check what data you have:
+
+```bash
+# Check price data
+uv run python scripts/verify_data_availability.py --ticker AAPL
+
+# Check fundamentals in R2
+AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY=$R2_SECRET_ACCESS_KEY \
+  aws s3 ls s3://$R2_BUCKET_NAME/fundamentals_quarterly/v1/AAPL/ --endpoint-url $R2_ENDPOINT_URL
+
+# Check Supabase tables
+psql $DATABASE_URL -c "SELECT * FROM indicator_state WHERE ticker = 'AAPL'"
+psql $DATABASE_URL -c "SELECT * FROM valuation_stats WHERE ticker = 'AAPL'"
+psql $DATABASE_URL -c "SELECT * FROM fundamentals_latest WHERE ticker = 'AAPL'"
+```
+
+#### Minimal Data Requirements by Template
+
+| Template | Price Data | Fundamentals | indicator_state | valuation_stats | fundamentals_latest |
+|----------|-----------|--------------|-----------------|-----------------|---------------------|
+| T1-T4 (Technical) | 200 days | Not needed | Optional* | Not needed | Not needed |
+| T5-T6 (Tech+Val) | 200 days | 4 quarters | Optional* | Not needed | Auto-populated** |
+| T7-T10 (Historical) | 5 years | 5 years | Optional* | **Required** | Auto-populated** |
+
+\* Optional = Performance optimization (faster if present, works without)
+\*\* Auto-populated = Computed automatically during features pipeline
 
 ---
 
@@ -754,21 +929,70 @@ r2.put_parquet(key, fundamentals_df)
 **Issue**: Daily pipeline fails with "No price data available"
 - **Cause**: EODHD API rate limit or missing ticker
 - **Fix**: Check `prices_ingestion/v1/{date}/` for missing files, verify EODHD_API_KEY
-- **Verify**: `python scripts/verify_data_availability.py --date 2025-12-30`
+- **Verify**: `uv run python scripts/verify_data_availability.py --date 2025-12-30`
 
 **Issue**: EMA computation returns NaN
 - **Cause**: Insufficient price history (<200 days for EMA 200)
-- **Fix**: Run backfill: `python scripts/ingest_prices.py --ticker AAPL --days 400`
+- **Fix**: Run backfill: `uv run python scripts/ingest_prices.py --ticker AAPL --days 400`
 - **Verify**: Check indicator_state table for prev_value
 
-**Issue**: Templates not triggering
-- **Cause**: Missing valuation_stats for stats templates (T7-T10)
-- **Fix**: Run weekly stats pipeline: `python -m src.features.pipeline_weekly_stats`
-- **Verify**: `SELECT * FROM valuation_stats WHERE ticker = 'AAPL'`
+**Issue**: Templates not triggering (getting empty results)
+
+**Diagnosis - Check which templates are being evaluated**:
+- T1-T6 (Basic): Only need features_daily data
+- T7-T10 (Stats): Need valuation_stats table
+
+**Step 1: Verify data completeness for basic templates (T1-T6)**
+```bash
+# Check if features_daily has required columns
+uv run python -c "
+from src.storage.r2_client import R2Client
+r2 = R2Client()
+df = r2.get_features_latest()
+print('Required columns:', ['close', 'ema_200', 'ema_50', 'ev_ebitda'])
+print('Available columns:', df.columns.tolist())
+print('\nSample data:')
+print(df[['ticker', 'close', 'ema_200', 'ev_ebitda']].head())
+"
+```
+
+**Common Fixes**:
+- Missing `ema_200` or `ema_50`: Run features pipeline, check indicator_state table
+  ```bash
+  psql $DATABASE_URL -c "SELECT * FROM indicator_state WHERE ticker = 'AAPL'"
+  ```
+- Missing `ev_ebitda`: Check fundamentals_latest table has TTM data
+  ```bash
+  psql $DATABASE_URL -c "SELECT ticker, ebitda_ttm, asof_date FROM fundamentals_latest WHERE ticker = 'AAPL'"
+  ```
+
+**Step 2: Verify data for stats templates (T7-T10)**
+```bash
+# Check if valuation_stats exists
+psql $DATABASE_URL -c "SELECT ticker, p20, p50, p80 FROM valuation_stats WHERE ticker = 'AAPL'"
+```
+
+**Fix**: Run weekly stats pipeline once
+```bash
+uv run python -m src.features.pipeline_weekly_stats
+```
+
+**Step 3: Check template evaluation logs**
+```bash
+# Run pipeline with verbose logging
+uv run python -m src.features.pipeline_daily \
+  --run-date 2025-12-30 \
+  --tickers AAPL \
+  --skip-features  # Only evaluate templates
+```
+
+Look for output like:
+- "Evaluating template T1 for 100 tickers" → Working
+- "Skipping template T7: missing required stats" → Need valuation_stats
 
 **Issue**: Emails not sending
 - **Cause**: Invalid SMTP credentials or firewall
-- **Fix**: Test SMTP: `python src/email/sender.py` (manual test mode)
+- **Fix**: Test SMTP: `uv run python src/email/sender.py` (manual test mode)
 - **Verify**: Check GitHub Actions logs for SMTP errors
 
 ### 13.2 Data Availability Verification
@@ -778,10 +1002,10 @@ r2.put_parquet(key, fundamentals_df)
 **Usage**:
 ```bash
 # Check all watchlist tickers for specific date
-python scripts/verify_data_availability.py --date 2025-12-30
+uv run python scripts/verify_data_availability.py --date 2025-12-30
 
 # Check specific ticker
-python scripts/verify_data_availability.py --ticker AAPL
+uv run python scripts/verify_data_availability.py --ticker AAPL
 ```
 
 **Checks**:
@@ -821,16 +1045,6 @@ python scripts/verify_data_availability.py --ticker AAPL
 ## 14. Performance Optimization
 
 ### 14.1 Query Optimization
-
-**Parquet Filters**: Use predicates to read only required partitions
-```python
-# Good: Only read specific ticker
-df = r2.read_parquet('fundamentals_quarterly/v1/AAPL/data.parquet')
-
-# Bad: Read all tickers then filter
-all_df = r2.read_parquet('fundamentals_quarterly/v1/*/*.parquet')
-df = all_df[all_df['ticker'] == 'AAPL']
-```
 
 **Supabase Indexes**: Ensure indexes on frequently queried columns
 ```sql
@@ -910,10 +1124,6 @@ fundamentals = reader.get_fundamentals('AAPL')
 - Predict template trigger likelihood
 - Optimize trigger_strength scoring
 
-**Mobile App**:
-- Push notifications for alerts
-- Watchlist management
-
 ### 16.2 Technical Debt
 
 **Refactoring**:
@@ -934,6 +1144,17 @@ fundamentals = reader.get_fundamentals('AAPL')
 ---
 
 ## Quick Reference
+
+### Python Execution
+
+**⚠️ Always use:** `uv run python <script>` (see section 1.1 for details)
+
+**Examples:**
+```bash
+uv run python scripts/ingest_prices.py --tickers AAPL --days 7
+uv run python -m src.features.pipeline_daily --run-date 2025-12-30
+uv run python tests/test_templates.py
+```
 
 ### File Paths
 

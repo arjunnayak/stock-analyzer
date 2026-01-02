@@ -215,13 +215,13 @@ class TestT4ExtendedAboveTrend:
 
 
 class TestT5CheapAbsoluteWithTrend:
-    """Test T5: Value + momentum (cheap EV/EBITDA with trend)."""
+    """Test T5: Value + momentum (cheap EV/EBIT with trend)."""
 
     def test_triggers_on_cheap_with_trend(self):
-        """Test trigger when EV/EBITDA <= 10 and price > ema_200."""
+        """Test trigger when EV/EBIT <= 12 and price > ema_200."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [8.0],
+            "ev_ebit": [10.0],
             "close": [110],
             "ema_200": [100],
         })
@@ -230,14 +230,14 @@ class TestT5CheapAbsoluteWithTrend:
         results = template.evaluate(df)
 
         assert len(results) == 1
-        # Strength = (10 - 8) / 10 = 0.2
-        assert abs(results.iloc[0]["trigger_strength"] - 0.2) < 0.001
+        # Strength = (12 - 10) / 12 = 0.167
+        assert abs(results.iloc[0]["trigger_strength"] - 0.167) < 0.01
 
     def test_no_trigger_expensive(self):
-        """Test no trigger when EV/EBITDA > 10."""
+        """Test no trigger when EV/EBIT > 12."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [15.0],
+            "ev_ebit": [18.0],
             "close": [110],
             "ema_200": [100],
         })
@@ -251,7 +251,7 @@ class TestT5CheapAbsoluteWithTrend:
         """Test no trigger when price below EMA."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [8.0],
+            "ev_ebit": [10.0],
             "close": [95],
             "ema_200": [100],
         })
@@ -269,7 +269,7 @@ class TestT6ExpensiveWithExtension:
         """Test trigger when expensive and extended."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [30.0],  # >= 25
+            "ev_ebit": [35.0],  # >= 30
             "close": [120],  # 20% above ema_200 (>= 15%)
             "ema_200": [100],
         })
@@ -283,7 +283,7 @@ class TestT6ExpensiveWithExtension:
         """Test no trigger when cheap."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [10.0],  # < 25
+            "ev_ebit": [12.0],  # < 30
             "close": [120],
             "ema_200": [100],
         })
@@ -298,26 +298,26 @@ class TestT7CheapVsHistory:
     """Test T7: Cheap vs history (below p20)."""
 
     def test_triggers_below_p20(self):
-        """Test trigger when EV/EBITDA below p20."""
+        """Test trigger when EV/EBIT below p20."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [8.0],
-            "ev_ebitda_p20": [10.0],
+            "ev_ebit": [10.0],
+            "ev_ebit_p20": [12.0],
         })
 
         template = CheapVsHistory()
         results = template.evaluate(df)
 
         assert len(results) == 1
-        # Strength = (10 - 8) / 10 = 0.2
-        assert abs(results.iloc[0]["trigger_strength"] - 0.2) < 0.001
+        # Strength = (12 - 10) / 12 = 0.167
+        assert abs(results.iloc[0]["trigger_strength"] - 0.167) < 0.01
 
     def test_no_trigger_above_p20(self):
         """Test no trigger when above p20."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [12.0],
-            "ev_ebitda_p20": [10.0],
+            "ev_ebit": [15.0],
+            "ev_ebit_p20": [12.0],
         })
 
         template = CheapVsHistory()
@@ -329,8 +329,8 @@ class TestT7CheapVsHistory:
         """Test graceful handling of missing stats column."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [8.0],
-            # Missing ev_ebitda_p20
+            "ev_ebit": [10.0],
+            # Missing ev_ebit_p20
         })
 
         template = CheapVsHistory()
@@ -343,11 +343,11 @@ class TestT8ExpensiveVsHistory:
     """Test T8: Expensive vs history (above p80)."""
 
     def test_triggers_above_p80(self):
-        """Test trigger when EV/EBITDA above p80."""
+        """Test trigger when EV/EBIT above p80."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [25.0],
-            "ev_ebitda_p80": [20.0],
+            "ev_ebit": [32.0],
+            "ev_ebit_p80": [28.0],
         })
 
         template = ExpensiveVsHistory()
@@ -363,8 +363,8 @@ class TestT9ValueAtMedian:
         """Test trigger when at median."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [15.0],
-            "ev_ebitda_p50": [15.0],
+            "ev_ebit": [18.0],
+            "ev_ebit_p50": [18.0],
         })
 
         template = ValueAtMedian()
@@ -376,8 +376,8 @@ class TestT9ValueAtMedian:
         """Test trigger when below median."""
         df = pd.DataFrame({
             "ticker": ["AAPL"],
-            "ev_ebitda": [12.0],
-            "ev_ebitda_p50": [15.0],
+            "ev_ebit": [14.0],
+            "ev_ebit_p50": [18.0],
         })
 
         template = ValueAtMedian()
@@ -395,8 +395,8 @@ class TestT10TrendUpValueCheap:
             "ticker": ["AAPL"],
             "ema_50": [110],
             "ema_200": [100],  # Uptrend
-            "ev_ebitda": [8.0],
-            "ev_ebitda_p20": [10.0],
+            "ev_ebit": [10.0],
+            "ev_ebit_p20": [12.0],
         })
 
         template = TrendUpValueCheap()
@@ -410,8 +410,8 @@ class TestT10TrendUpValueCheap:
             "ticker": ["AAPL"],
             "ema_50": [95],
             "ema_200": [100],  # Downtrend
-            "ev_ebitda": [8.0],
-            "ev_ebitda_p20": [10.0],
+            "ev_ebit": [10.0],
+            "ev_ebit_p20": [12.0],
         })
 
         template = TrendUpValueCheap()
@@ -461,7 +461,7 @@ class TestEvaluateAllTemplates:
             "ema_50": [110, 105],
             "prev_close": [98, 95],
             "prev_ema_200": [100, 100],
-            "ev_ebitda": [8.0, 30.0],
+            "ev_ebit": [10.0, 35.0],
         })
 
         results = evaluate_all_templates(df, templates=BASIC_TEMPLATES)

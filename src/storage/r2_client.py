@@ -211,19 +211,45 @@ class R2Client:
         """
         List keys with given prefix.
 
+        Implements pagination to support retrieving more than 1000 keys
+        (S3's hard limit per request).
+
         Args:
             prefix: Key prefix to filter
-            max_keys: Maximum number of keys to return
+            max_keys: Maximum number of keys to return (default: 1000)
 
         Returns:
             List of keys
         """
-        response = self.s3.list_objects_v2(Bucket=self.bucket, Prefix=prefix, MaxKeys=max_keys)
+        keys = []
+        continuation_token = None
 
-        if "Contents" not in response:
-            return []
+        while True:
+            # Build request parameters
+            params = {
+                "Bucket": self.bucket,
+                "Prefix": prefix,
+                "MaxKeys": min(1000, max_keys - len(keys)),  # S3 limit is 1000 per request
+            }
 
-        return [obj["Key"] for obj in response["Contents"]]
+            if continuation_token:
+                params["ContinuationToken"] = continuation_token
+
+            # Make request
+            response = self.s3.list_objects_v2(**params)
+
+            # Add keys from this page
+            if "Contents" in response:
+                keys.extend([obj["Key"] for obj in response["Contents"]])
+
+            # Check if we've reached the limit or if there are more pages
+            if len(keys) >= max_keys or not response.get("IsTruncated", False):
+                break
+
+            # Get continuation token for next page
+            continuation_token = response.get("NextContinuationToken")
+
+        return keys[:max_keys]  # Ensure we don't exceed max_keys
 
     # =========================================================================
     # Date-Partitioned Features (features/v1/date=YYYY-MM-DD/)
@@ -447,6 +473,29 @@ class R2Client:
         """
         key = self.build_price_snapshot_key(run_date)
         return self.get_parquet(key)
+
+    def get_latest_price_snapshot_date(self, lookback_days: int = 7) -> Optional[date]:
+        """
+        Find the most recent price snapshot within the lookback window.
+
+        Args:
+            lookback_days: Number of days to look back (default: 7)
+
+        Returns:
+            Most recent date with price data, or None if not found
+        """
+        end_date = date.today()
+        start_date = end_date - timedelta(days=lookback_days)
+
+        # Check each date from most recent to oldest
+        current_date = end_date
+        while current_date >= start_date:
+            key = self.build_price_snapshot_key(current_date)
+            if self.key_exists(key):
+                return current_date
+            current_date -= timedelta(days=1)
+
+        return None
 
 
 if __name__ == "__main__":

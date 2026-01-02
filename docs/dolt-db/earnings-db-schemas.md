@@ -141,31 +141,31 @@
 
 ## `income_statement`
 
-| Column                            | Type          |
-| --------------------------------- | ------------- |
-| date                              | date          |
-| act_symbol                        | varchar(64)   |
-| period                            | varchar(64)   |
-| sales                             | decimal(24,8) |
-| cost_of_goods                     | decimal(24,8) |
-| gross_profit                      | decimal(24,8) |
-| selling_administrative            | decimal(24,8) |
-| income_after_depreciation         | decimal(24,8) |
-| non_operating_income              | decimal(24,8) |
-| interest_expense                  | decimal(24,8) |
-| pretax_income                     | decimal(24,8) |
-| income_taxes                      | decimal(24,8) |
-| minority_interest                 | decimal(24,8) |
-| investment_gains                  | decimal(24,8) |
-| other_income                      | decimal(24,8) |
-| income_from_continuing_operations | decimal(24,8) |
-| extras_and_discontinued           | decimal(24,8) |
-| net_income                        | decimal(24,8) |
-| income_before_depreciation        | decimal(24,8) |
-| depreciation_and_amortization     | decimal(24,8) |
-| average_shares                    | decimal(24,8) |
-| diluted_eps_before_non_recurring  | decimal(16,2) |
-| diluted_net_eps                   | decimal(16,2) |
+| Column                                                    | Type          |
+| ----------------------------------------------------------| ------------- |
+| date                                                      | date          |
+| act_symbol                                                | varchar(64)   |
+| period                                             | varchar(64)   |
+| sales                                              | decimal(24,8) |
+| cost_of_goods                                     | decimal(24,8) |
+| gross_profit                                      | decimal(24,8) |
+| selling_administrative_depreciation_amortization_expenses | decimal(24,8) |
+| income_after_depreciation_and_amortization         | decimal(24,8) |
+| non_operating_income                              | decimal(24,8) |
+| interest_expense                                  | decimal(24,8) |
+| pretax_income                                     | decimal(24,8) |
+| income_taxes                                      | decimal(24,8) |
+| minority_interest                                 | decimal(24,8) |
+| investment_gains                                  | decimal(24,8) |
+| other_income                                      | decimal(24,8) |
+| income_from_continuing_operations                 | decimal(24,8) |
+| extras_and_discontinued                           | decimal(24,8) |
+| net_income                                        | decimal(24,8) |
+| income_before_depreciation_and_amortization       | decimal(24,8) |
+| depreciation_and_amortization                     | decimal(24,8) |
+| average_shares                                    | decimal(24,8) |
+| diluted_eps_before_non_recurring                  | decimal(16,2) |
+| diluted_net_eps                                   | decimal(16,2) |
 
 ---
 
