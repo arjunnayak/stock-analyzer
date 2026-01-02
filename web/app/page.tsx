@@ -1,18 +1,45 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 
 export default function Home() {
   const [email, setEmail] = useState('')
-  const router = useRouter()
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [success, setSuccess] = useState(false)
+  const [error, setError] = useState('')
 
-  const handleGetStarted = (isPaid = false) => {
-    if (email) {
-      router.push(`/signup?email=${encodeURIComponent(email)}${isPaid ? '&plan=paid' : ''}`)
-    } else {
-      router.push(`/signup${isPaid ? '?plan=paid' : ''}`)
+  const handleSubmit = async (isPaid = false) => {
+    if (!email) {
+      setError('Please enter your email')
+      return
+    }
+
+    setIsSubmitting(true)
+    setError('')
+
+    try {
+      const response = await fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          planInterest: isPaid ? 'paid' : 'free',
+          source: 'landing_page'
+        })
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        setSuccess(true)
+        setEmail('')
+      } else {
+        setError(data.error || 'Something went wrong. Please try again.')
+      }
+    } catch (err) {
+      setError('Something went wrong. Please try again.')
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -32,31 +59,50 @@ export default function Home() {
           </p>
 
           {/* CTA Buttons */}
-          <div className="flex flex-col sm:flex-row gap-4 mb-8">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter your email"
-              className="px-5 py-4 border border-gray-300 rounded-lg text-base w-full sm:w-96 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
-              onKeyDown={(e) => e.key === 'Enter' && handleGetStarted()}
-            />
-            <button
-              onClick={() => handleGetStarted()}
-              className="px-6 py-4 bg-black text-white rounded-lg font-medium hover:bg-gray-800 transition-all whitespace-nowrap"
-            >
-              Join Early Access
-            </button>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            <span>or</span>
-            <button
-              onClick={() => handleGetStarted(true)}
-              className="underline hover:text-black transition-colors"
-            >
-              Reserve Your Spot — $10/month (fully refundable)
-            </button>
-          </div>
+          {success ? (
+            <div className="p-6 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-green-800 text-lg font-medium">
+                ✓ You're on the list! Check your email for next steps.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-4 mb-2">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    setError('')
+                  }}
+                  placeholder="Enter your email"
+                  className="px-5 py-4 border border-gray-300 rounded-lg text-base w-full sm:w-96 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+                  disabled={isSubmitting}
+                />
+                <button
+                  onClick={() => handleSubmit()}
+                  disabled={isSubmitting}
+                  className="px-6 py-4 bg-black text-white rounded-lg font-medium hover:bg-gray-800 transition-all whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmitting ? 'Joining...' : 'Join Early Access'}
+                </button>
+              </div>
+              {error && (
+                <p className="text-red-600 text-sm mb-4">{error}</p>
+              )}
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <span>or</span>
+                <button
+                  onClick={() => handleSubmit(true)}
+                  disabled={isSubmitting}
+                  className="underline hover:text-black transition-colors disabled:opacity-50"
+                >
+                  Reserve Your Spot — $10/month (fully refundable)
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </section>
 
@@ -275,34 +321,53 @@ export default function Home() {
             </li>
           </ul>
 
-          <div className="flex flex-col sm:flex-row gap-4 mb-6">
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter your email"
-              className="px-5 py-4 border border-gray-300 rounded-lg text-base w-full sm:w-96 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
-              onKeyDown={(e) => e.key === 'Enter' && handleGetStarted()}
-            />
-            <button
-              onClick={() => handleGetStarted()}
-              className="px-6 py-4 bg-black text-white rounded-lg font-medium hover:bg-gray-800 transition-all whitespace-nowrap"
-            >
-              Join Early Access
-            </button>
-          </div>
-          <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
-            <span>or</span>
-            <button
-              onClick={() => handleGetStarted(true)}
-              className="underline hover:text-black transition-colors"
-            >
-              Reserve Your Spot — $10/month (fully refundable)
-            </button>
-          </div>
-          <p className="text-sm text-gray-500 italic">
-            Early users help shape the product.
-          </p>
+{success ? (
+            <div className="p-6 bg-green-50 border border-green-200 rounded-lg">
+              <p className="text-green-800 text-lg font-medium">
+                ✓ You're on the list! Check your email for next steps.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-col sm:flex-row gap-4 mb-2">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    setError('')
+                  }}
+                  placeholder="Enter your email"
+                  className="px-5 py-4 border border-gray-300 rounded-lg text-base w-full sm:w-96 focus:outline-none focus:ring-2 focus:ring-black focus:border-transparent"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}
+                  disabled={isSubmitting}
+                />
+                <button
+                  onClick={() => handleSubmit()}
+                  disabled={isSubmitting}
+                  className="px-6 py-4 bg-black text-white rounded-lg font-medium hover:bg-gray-800 transition-all whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmitting ? 'Joining...' : 'Join Early Access'}
+                </button>
+              </div>
+              {error && (
+                <p className="text-red-600 text-sm mb-4">{error}</p>
+              )}
+              <div className="flex items-center gap-2 text-sm text-gray-500 mb-6">
+                <span>or</span>
+                <button
+                  onClick={() => handleSubmit(true)}
+                  disabled={isSubmitting}
+                  className="underline hover:text-black transition-colors disabled:opacity-50"
+                >
+                  Reserve Your Spot — $10/month (fully refundable)
+                </button>
+              </div>
+              <p className="text-sm text-gray-500 italic">
+                Early users help shape the product.
+              </p>
+            </>
+          )}
         </div>
       </section>
 
