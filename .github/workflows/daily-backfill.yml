@@ -1,9 +1,10 @@
 name: Daily Backfill from Queue
 
 on:
-  schedule:
-    # Run daily at 2 AM UTC (before market data evaluation at 6 PM ET)
-    - cron: '0 2 * * *'
+  # schedule:
+  #   # Run daily at 2 AM UTC (before market data evaluation at 6 PM ET)
+  #   # DISABLED: Run manually only via workflow_dispatch
+  #   - cron: '0 2 * * *'
   workflow_dispatch:  # Allow manual triggering
 
 env:
@@ -23,27 +24,25 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: 'pip'
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
       - name: Install dependencies
-        run: |
-          uv pip install --system -r requirements.txt
+        run: uv sync
 
       - name: Process backfill queue
         env:
+          ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
-          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
           R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
           EODHD_API_KEY: ${{ secrets.EODHD_API_KEY }}
         run: |
-          python scripts/process_backfill_queue.py
+          uv run python scripts/process_backfill_queue.py
 
       - name: Upload logs
         if: always()

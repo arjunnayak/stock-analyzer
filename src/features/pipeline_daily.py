@@ -108,17 +108,17 @@ class DailyPipeline:
 
         # Discover latest available price data (within 7 days)
         if run_date is None:
-            # Try snapshot first (fast)
-            latest_price_date = self.r2.get_latest_price_snapshot_date(lookback_days=7)
+            # Check ingestion data first (to get absolute latest after STEP 1)
+            from src.reader import TimeSeriesReader
+            reader = TimeSeriesReader()
+            latest_price_date = reader.get_latest_price_date(
+                validation_tickers, lookback_days=7
+            )
 
-            # If no snapshot, check ingestion data (slower but works before Step 1.5 runs)
+            # If no ingestion data, fall back to snapshots
             if latest_price_date is None:
-                print("No price snapshot found, checking ingestion data...")
-                from src.reader import TimeSeriesReader
-                reader = TimeSeriesReader()
-                latest_price_date = reader.get_latest_price_date(
-                    validation_tickers, lookback_days=7
-                )
+                print("No ingestion data found, checking snapshots...")
+                latest_price_date = self.r2.get_latest_price_snapshot_date(lookback_days=7)
 
             if latest_price_date is None:
                 print("✗ No price data found in the last 7 days")
