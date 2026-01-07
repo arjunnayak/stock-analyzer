@@ -67,7 +67,7 @@ jobs:
       # STEP 1: Ingest Latest Prices from EODHD
       # ===================================================================
       - name: 1. Ingest latest prices
-        if: ${{ !inputs.skip_ingestion }}
+        if: ${{ github.event_name == 'schedule' || !inputs.skip_ingestion }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -92,7 +92,7 @@ jobs:
       # STEP 2: Create Price Snapshot + Compute Daily Features
       # ===================================================================
       - name: 2. Create snapshot and compute features
-        if: ${{ !inputs.skip_features }}
+        if: ${{ github.event_name == 'schedule' || !inputs.skip_features }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -131,7 +131,7 @@ jobs:
       # STEP 3: Evaluate Templates and Send Alert Emails
       # ===================================================================
       - name: 3. Evaluate templates and send alerts
-        if: ${{ !inputs.skip_templates }}
+        if: ${{ github.event_name == 'schedule' || !inputs.skip_templates }}
         env:
           ENV: REMOTE
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
