@@ -4,7 +4,9 @@
 
 The daily pipeline was only processing data through December 31, 2025, even though it was running on January 5, 2026 (and multiple trading days had occurred since then).
 
-## Root Cause
+## Root Causes (Two Separate Issues)
+
+### Issue 1: Workflow Step Conditions
 
 **Critical Bug in `.github/workflows/daily-pipeline.yml`**
 
@@ -31,7 +33,7 @@ if: ${{ !inputs.skip_templates }}
 - STEP 2 (features) correctly found "latest available data" = Dec 31
 - Pipeline appeared to work but was processing stale data
 
-## The Fix
+**Fix for Issue 1:**
 
 Changed all three step conditions to:
 
@@ -46,10 +48,49 @@ if: ${{ github.event_name == 'schedule' || !inputs.skip_templates }}
 - **Scheduled runs (cron)**: Always run all steps (`github.event_name == 'schedule'` is true)
 - **Manual runs**: Respect skip flags (`!inputs.skip_*` is evaluated)
 
+---
+
+### Issue 2: Date Discovery Logic
+
+**Critical Bug in `src/features/pipeline_daily.py`**
+
+After fixing Issue 1, STEP 1 successfully ingested data for 2026-01-02, 2026-01-03, and 2026-01-06. However, STEP 2 still processed 2025-12-31.
+
+**The Problem:**
+
+Lines 111-121 checked for the latest date in this order:
+1. ✅ Check snapshots first (fast) → Found `2025-12-31` snapshot
+2. ❌ **Never checked ingestion data** because snapshot was found
+3. Used stale date `2025-12-31`
+
+**Why this failed:**
+- Newly ingested data was in `prices/v1/AAPL/2026/01/data.parquet`
+- No **snapshot** existed for 2026-01-06 yet
+- Old `2025-12-31` snapshot still existed (< 7 days old, considered "fresh")
+- Pipeline chose old snapshot, ignored new ingestion data
+
+**Fix for Issue 2:**
+
+Reversed the priority in date discovery:
+
+```python
+# OLD (wrong priority)
+1. Check snapshots first
+2. If no snapshot, check ingestion data
+
+# NEW (correct priority)
+1. Check ingestion data first (absolute latest)
+2. If no ingestion data, fall back to snapshots
+```
+
+**This ensures:** After STEP 1 ingests new data, STEP 2 always discovers and processes the latest date, even if snapshots haven't been created yet.
+
 ## Changes Made
 
 ### Modified Files
-- `.github/workflows/daily-pipeline.yml` - Fixed all 3 step conditions
+- `.github/workflows/daily-pipeline.yml` - Fixed all 3 step conditions (Issue 1)
+- `.github/workflows/daily-backfill.yml` - Modernized and disabled auto-schedule
+- `src/features/pipeline_daily.py` - Fixed date discovery priority (Issue 2)
 
 ### New Diagnostic Scripts (for future debugging)
 - `scripts/debug_date_issue.py` - Checks system date, R2 data, and EODHD API
@@ -115,16 +156,29 @@ if data_age_days > 3 and not is_holiday_week():
 - `scripts/debug_date_issue.py` (new)
 - `scripts/check_recent_price_data.py` (new)
 
-## Commit
+## Commits
 
 ```
-commit 0a4b56d
-Fix daily pipeline not ingesting data for 2026
+commit 0a4b56d - Fix daily pipeline not ingesting data for 2026 (Issue 1)
+commit a2bbda4 - Fix and disable automatic daily backfill workflow
+commit 798fed5 - Fix date discovery to check ingestion data before snapshots (Issue 2)
 ```
 
 ## Next Steps
 
-1. ✅ Fix is now on branch `claude/fix-pipeline-date-issue-CvciG`
-2. Wait for tonight's run OR manually trigger to verify
-3. Merge to main once verified
-4. Monitor for a few days to ensure continuous operation
+1. ✅ Both fixes are now on branch `claude/fix-pipeline-date-issue-CvciG`
+2. **Test by manually triggering the workflow again** to verify it now processes 2026-01-06
+3. Expected output: `✓ Using latest available price data: 2026-01-06`
+4. Merge to main once verified
+5. Monitor for a few days to ensure continuous operation
+
+## Expected Behavior After Fix
+
+When you run the pipeline now:
+1. **STEP 1**: Ingests prices from EODHD (2025-12-31 to 2026-01-07)
+   - Writes to `prices/v1/*/2026/01/data.parquet`
+2. **STEP 2**: Date discovery checks ingestion data
+   - Finds latest date: **2026-01-06** (most recent trading day)
+   - Creates snapshot for 2026-01-06
+   - Computes features for 2026-01-06
+3. **STEP 3**: Evaluates templates using 2026-01-06 data
