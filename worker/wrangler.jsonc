@@ -25,7 +25,6 @@
 	 * R2 Bucket binding for market data
 	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/r2/
 	 */
-	// Uncomment when ready to use:
 	"r2_buckets": [
 	  {
 	    "binding": "BUCKET",

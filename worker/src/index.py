@@ -85,6 +85,8 @@ class Default(WorkerEntrypoint):
                     return await self.handle_entities(request, parts[2:], db)
                 elif parts[1] == 'alerts':
                     return await self.handle_alerts(request, parts[2:], db)
+                elif parts[1] == 'dashboard':
+                    return await self.handle_dashboard(request, parts[2:])
                 elif parts[1] == 'health':
                     return json_response({'status': 'ok', 'service': 'material-changes-api'})
 
@@ -314,3 +316,52 @@ class Default(WorkerEntrypoint):
             return json_response(result['data'])
 
         return error_response('Endpoint not found', 404)
+
+    # ============================================================================
+    # DASHBOARD ROUTES (reads pre-computed JSON from R2)
+    # ============================================================================
+
+    async def handle_dashboard(self, request, parts):
+        """
+        Handle /api/dashboard/* routes
+
+        GET /api/dashboard/overview
+        GET /api/dashboard/:ticker
+        """
+        method = request.method
+
+        if method != 'GET':
+            return error_response('Method not allowed', 405)
+
+        if not parts:
+            return error_response('Invalid dashboard endpoint', 404)
+
+        # GET /api/dashboard/overview
+        if parts[0] == 'overview':
+            return await self._read_r2_json('dashboard/v1/overview.json')
+
+        # GET /api/dashboard/:ticker
+        else:
+            ticker = parts[0].upper()
+            return await self._read_r2_json(f'dashboard/v1/{ticker}.json')
+
+    async def _read_r2_json(self, key):
+        """Read a JSON file from R2 and return it as a response."""
+        try:
+            obj = await self.env.BUCKET.get(key)
+            if obj is None:
+                return error_response('Data not found', 404)
+
+            text = await obj.text()
+            return Response(
+                text,
+                status=200,
+                headers={
+                    **CORS_HEADERS,
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'public, max-age=300',  # Cache 5 min
+                }
+            )
+        except Exception as e:
+            print(f"Error reading R2 key {key}: {e}")
+            return error_response('Failed to read data', 500)

@@ -14,6 +14,7 @@ import pandas as pd
 
 from src.email.delivery import EmailDeliveryService
 from src.features.alert_notifications import AlertNotifier
+from src.features.dashboard_export import DashboardExporter
 from src.features.features_compute import FeaturesComputer
 from src.features.templates import (
     ALL_TEMPLATES,
@@ -46,6 +47,7 @@ class DailyPipeline:
             r2_client=self.r2,
             db=self.db,
         )
+        self.dashboard_exporter = DashboardExporter(r2_client=self.r2)
         self.email_service = EmailDeliveryService()
         self.alert_notifier = AlertNotifier(
             r2_client=self.r2,
@@ -70,6 +72,7 @@ class DailyPipeline:
         skip_snapshot: bool = False,
         skip_features: bool = False,
         skip_templates: bool = False,
+        skip_dashboard: bool = False,
         skip_alerts: bool = False,
         skip_stats_templates: bool = False,
         dry_run: bool = False,
@@ -83,6 +86,7 @@ class DailyPipeline:
             skip_snapshot: Skip Step 1.5 (price snapshot creation)
             skip_features: Skip Step 2 (feature computation)
             skip_templates: Skip Step 3 (template evaluation)
+            skip_dashboard: Skip Step 3.5 (dashboard JSON export)
             skip_alerts: Skip Step 4 (alert notifications)
             skip_stats_templates: Skip templates that require valuation stats
             dry_run: Don't write to R2 or Supabase
@@ -200,6 +204,7 @@ class DailyPipeline:
             "step1_5_snapshot": None,
             "step2_features": None,
             "step3_templates": None,
+            "step3_5_dashboard": None,
             "step4_alerts": None,
             "status": "pending",
         }
@@ -270,6 +275,33 @@ class DailyPipeline:
             results["step3_templates"] = step3_result
 
         # =====================================================================
+        # Step 3.5: Dashboard JSON Export
+        # =====================================================================
+        if not skip_dashboard and not dry_run:
+            # Get features (either from step 2 or from R2)
+            dashboard_features = None
+            if not skip_features and results.get("step2_features", {}).get("status") == "success":
+                dashboard_features = self.r2.get_features_latest()
+            elif skip_features:
+                dashboard_features = self.r2.get_features_latest()
+
+            # Get triggers (either from step 3 or empty)
+            dashboard_triggers = pd.DataFrame()
+            if not skip_templates and results.get("step3_templates", {}).get("total_triggers", 0) > 0:
+                dashboard_triggers = self.r2.get_triggers(run_date) or pd.DataFrame()
+
+            if dashboard_features is not None and not dashboard_features.empty:
+                step3_5_result = self.dashboard_exporter.export_dashboard(
+                    features_df=dashboard_features,
+                    triggers_df=dashboard_triggers if isinstance(dashboard_triggers, pd.DataFrame) else pd.DataFrame(),
+                    run_date=run_date,
+                )
+                results["step3_5_dashboard"] = step3_5_result
+            else:
+                print("No features available for dashboard export")
+                results["step3_5_dashboard"] = {"status": "no_features"}
+
+        # =====================================================================
         # Step 4: Alert Notifications
         # =====================================================================
         if not skip_alerts:
@@ -309,6 +341,10 @@ class DailyPipeline:
             print(f"Features: {results['step2_features'].get('tickers_processed', 0)} tickers")
         if results["step3_templates"]:
             print(f"Templates: {results['step3_templates'].get('total_triggers', 0)} total triggers")
+        if results.get("step3_5_dashboard"):
+            dashboard_info = results["step3_5_dashboard"]
+            if dashboard_info.get("status") == "success":
+                print(f"Dashboard: {dashboard_info.get('tickers_exported', 0)} tickers exported")
         if results.get("step4_alerts"):
             alerts_info = results["step4_alerts"]
             if alerts_info.get("status") not in ("no_triggers", "no_users"):
@@ -486,6 +522,11 @@ def main():
         help="Skip template evaluation (Step 3)",
     )
     parser.add_argument(
+        "--skip-dashboard",
+        action="store_true",
+        help="Skip dashboard JSON export (Step 3.5)",
+    )
+    parser.add_argument(
         "--skip-alerts",
         action="store_true",
         help="Skip alert notifications (Step 4)",
@@ -516,6 +557,7 @@ def main():
             skip_snapshot=args.skip_snapshot,
             skip_features=args.skip_features,
             skip_templates=args.skip_templates,
+            skip_dashboard=args.skip_dashboard,
             skip_alerts=args.skip_alerts,
             skip_stats_templates=args.skip_stats_templates,
             dry_run=args.dry_run,

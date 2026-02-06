@@ -186,3 +186,47 @@ export const entitiesApi = {
     }>(`/api/entities/${ticker}`)
   },
 }
+
+/**
+ * Dashboard API (pre-computed data from R2)
+ */
+export const dashboardApi = {
+  /**
+   * Get overview data for all tickers
+   */
+  async getOverview() {
+    return apiCall<{
+      updated_at: string
+      tickers: Array<{
+        ticker: string
+        sector: string | null
+        close: number | null
+        ema_200: number | null
+        ema_50: number | null
+        ev_ebit: number | null
+        triggers: Array<{
+          id: string
+          name: string
+          strength: number
+        }>
+      }>
+    }>('/api/dashboard/overview')
+  },
+
+  /**
+   * Get historical data for a specific ticker
+   */
+  async getTickerHistory(ticker: string) {
+    return apiCall<{
+      ticker: string
+      updated_at: string
+      history: Array<{
+        date: string
+        close: number | null
+        ema_200: number | null
+        ema_50: number | null
+        ev_ebit: number | null
+      }>
+    }>(`/api/dashboard/${ticker}`)
+  },
+}

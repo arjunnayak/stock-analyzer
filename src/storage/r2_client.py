@@ -82,6 +82,31 @@ class R2Client:
         print(f"✓ Wrote {len(df)} rows to {key}")
         return response
 
+    def put_json(self, key: str, data: dict) -> dict:
+        """Write JSON data to R2."""
+        import json
+        body = json.dumps(data, default=str).encode("utf-8")
+        response = self.s3.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+        )
+        print(f"✓ Wrote JSON to {key}")
+        return response
+
+    def get_json(self, key: str) -> Optional[dict]:
+        """Read JSON data from R2."""
+        import json
+        try:
+            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+            data = json.loads(response["Body"].read().decode("utf-8"))
+            return data
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "NoSuchKey":
+                return None
+            raise
+
     def get_parquet(self, key: str) -> Optional[pd.DataFrame]:
         """
         Read Parquet file from R2 as DataFrame.
