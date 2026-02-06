@@ -193,6 +193,33 @@ jobs:
           echo "  ✓ Hardcoded templates evaluated"
           echo "  ✓ Email alerts sent to users"
 
+      - name: Notify on success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: '[✓] Daily Pipeline Succeeded'
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: Material Changes Alerts <noreply@materialchanges.app>
+          body: |
+            The daily pipeline completed successfully.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Time: ${{ github.event.head_commit.timestamp }}
+
+            All steps completed:
+            - Price data ingested from EODHD
+            - Price snapshot created
+            - Daily features computed (EMA, EV/EBITDA)
+            - Template evaluation completed
+            - User alerts sent (if any triggers fired)
+
+            View detailed logs:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
       - name: Notify on failure
         if: failure()
         uses: dawidd6/action-send-mail@v3

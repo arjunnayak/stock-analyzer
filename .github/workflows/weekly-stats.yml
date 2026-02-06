@@ -102,6 +102,29 @@ jobs:
           echo "✅ Weekly Valuation Stats Completed Successfully"
           echo "======================================================================"
 
+      - name: Notify on success
+        if: success()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USER }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: '[✓] Weekly Valuation Stats Succeeded'
+          to: ${{ secrets.ALERT_EMAIL }}
+          from: Material Changes Alerts <noreply@materialchanges.app>
+          body: |
+            The weekly valuation stats computation completed successfully.
+
+            Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Time: ${{ github.event.head_commit.timestamp }}
+
+            Valuation percentiles (p10, p20, p50, p80, p90) have been updated for all active tickers.
+            These stats power templates T7-T10 (historical valuation analysis).
+
+            View detailed logs:
+            ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
       - name: Notify on failure
         if: failure()
         uses: dawidd6/action-send-mail@v3
